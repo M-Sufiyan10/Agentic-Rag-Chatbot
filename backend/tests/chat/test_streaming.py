@@ -7,7 +7,7 @@ from typing import Any
 from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
 from langchain_core.language_models import BaseChatModel
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
-from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 from langgraph.checkpoint.memory import InMemorySaver
 
@@ -102,3 +102,22 @@ async def test_stream_model_failure_yields_error_event() -> None:
         MODEL_ERROR_MESSAGE
         == "The assistant couldn't respond. Is the model server running? Please try again."
     )
+
+
+async def test_failed_run_does_not_persist_user_message() -> None:
+    saver = InMemorySaver()
+    config: Any = {"configurable": {"thread_id": "thread-1"}}
+    failing = build_graph(FailingChatModel(messages=iter([])), saver)
+
+    events = await _collect(failing, "hi")
+
+    assert events[-1] == ("error", {"message": MODEL_ERROR_MESSAGE})
+    assert (await failing.aget_state(config)).values.get("messages", []) == []
+
+    # A retry of the same text on the same thread must not leave a duplicate.
+    working = build_graph(GenericFakeChatModel(messages=iter([AIMessage("ok")])), saver)
+    events = await _collect(working, "hi")
+
+    assert events[-1] == ("done", {"content": "ok"})
+    messages = (await working.aget_state(config)).values["messages"]
+    assert [(type(m), m.content) for m in messages] == [(HumanMessage, "hi"), (AIMessage, "ok")]

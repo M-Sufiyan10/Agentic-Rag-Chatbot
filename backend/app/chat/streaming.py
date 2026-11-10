@@ -27,8 +27,9 @@ import json
 import logging
 from collections.abc import AsyncIterator
 from typing import Any
+from uuid import uuid4
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph.state import CompiledStateGraph
 from sse_starlette import ServerSentEvent
@@ -62,6 +63,32 @@ def _events_for_chunk(chunk: object, reply_parts: list[str]) -> list[ServerSentE
     return []
 
 
+async def _roll_back_unanswered_message(
+    graph: CompiledStateGraph[Any, Any, Any, Any],
+    config: RunnableConfig,
+    human_message: HumanMessage,
+) -> None:
+    """Remove ``human_message`` from the thread if no reply followed it.
+
+    Never raises: a failed rollback is logged, and the caller still sends its
+    ``error`` event.
+    """
+    try:
+        state = await graph.aget_state(config)
+        messages = state.values.get("messages", [])
+        if messages and messages[-1].id == human_message.id:
+            # as_node="agent" records the update as if the agent node wrote it,
+            # so the graph stays at the end of the run instead of re-running it.
+            await graph.aupdate_state(
+                config, {"messages": [RemoveMessage(id=str(human_message.id))]}, as_node="agent"
+            )
+    except Exception:
+        logger.exception(
+            "Could not roll back unanswered message in thread %s",
+            config["configurable"]["thread_id"],
+        )
+
+
 async def stream_agent_events(
     graph: CompiledStateGraph[Any, Any, Any, Any], thread_id: str, user_text: str
 ) -> AsyncIterator[ServerSentEvent]:
@@ -73,17 +100,28 @@ async def stream_agent_events(
     Yields ``token`` events (``{"text": ...}``) as the reply is generated, then
     ``done`` (``{"content": <full reply>}``); or, on failure, one ``error``
     event (``{"message": ...}``) instead of ``done``.
+
+    Why there is a rollback on failure: LangGraph saves a checkpoint after the
+    ``input`` step, i.e. *before* the ``agent`` node (the model call) runs. If
+    the model then fails, the user's message would stay saved with no reply,
+    and the UI's Retry would send it again, leaving the same question in the
+    history twice. So on failure we delete that message again, but only if it
+    is still the last one (no reply was saved). Deleting works through the
+    ``add_messages`` reducer: a ``RemoveMessage`` with the message's id removes
+    it, which is why we give the input message an explicit id up front.
     """
     config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
     reply_parts: list[str] = []
+    human_message = HumanMessage(user_text, id=str(uuid4()))
     try:
         async for chunk, _metadata in graph.astream(
-            {"messages": [HumanMessage(user_text)]}, config, stream_mode="messages"
+            {"messages": [human_message]}, config, stream_mode="messages"
         ):
             for event in _events_for_chunk(chunk, reply_parts):
                 yield event
     except Exception:
         logger.exception("Agent run failed for thread %s", thread_id)
+        await _roll_back_unanswered_message(graph, config, human_message)
         yield sse_event("error", {"message": MODEL_ERROR_MESSAGE})
         return
     yield sse_event("done", {"content": "".join(reply_parts)})

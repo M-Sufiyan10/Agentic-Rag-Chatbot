@@ -1,9 +1,16 @@
 """API tests for POST/GET /api/conversations/{id}/messages and thread deletion."""
 
 import uuid
+from collections.abc import AsyncIterator
+from typing import Any
 
 import httpx
+import pytest
 from fastapi import FastAPI
+from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
+from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.outputs import ChatGenerationChunk
 from langchain_core.runnables import RunnableConfig
 
 from app.chat import router as chat_router
@@ -109,3 +116,40 @@ async def test_delete_conversation_deletes_thread(app: FastAPI, client: httpx.As
     assert r.status_code == 204
     state = await app.state.graph.aget_state(config)
     assert state.values.get("messages", []) == []
+
+
+class FailsOnceChatModel(GenericFakeChatModel):
+    """A fake model whose first call fails (server down), later calls succeed."""
+
+    failures_left: int = 1
+
+    async def _astream(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: AsyncCallbackManagerForLLMRun | None = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[ChatGenerationChunk]:
+        if self.failures_left > 0:
+            self.failures_left -= 1
+            raise ConnectionError("model server unreachable")
+        async for chunk in super()._astream(messages, stop, run_manager, **kwargs):
+            yield chunk
+
+
+# Parametrizing a fixture's name overrides it for this one test only.
+@pytest.mark.parametrize("chat_model", [FailsOnceChatModel(messages=iter([AIMessage("ok")]))])
+async def test_retry_after_model_failure_leaves_clean_history(client: httpx.AsyncClient) -> None:
+    headers = await register_user(client)
+    cid = await _new_conversation(client, headers)
+
+    first = await client.post(_messages_url(cid), json={"content": "hi"}, headers=headers)
+    assert [name for name, _ in read_sse(first)][-1] == "error"
+    retry = await client.post(_messages_url(cid), json={"content": "hi"}, headers=headers)
+    assert read_sse(retry)[-1] == ("done", {"content": "ok"})
+
+    history = await client.get(_messages_url(cid), headers=headers)
+    assert history.json() == [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "ok"},
+    ]
