@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.auth.router import router as auth_router
 from app.config import Settings, get_settings
 from app.db import create_engine, create_sessionmaker
 
@@ -38,5 +39,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def health() -> dict[str, str]:
         return {"status": "ok"}
 
+    api.include_router(auth_router)
     app.include_router(api)
     return app

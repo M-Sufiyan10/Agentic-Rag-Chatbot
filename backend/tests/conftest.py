@@ -58,7 +58,9 @@ async def db_session() -> AsyncIterator[AsyncSession]:
 
 @pytest.fixture
 def test_settings() -> Settings:
-    return Settings(database_url=TEST_DATABASE_URL, jwt_secret="test-secret")
+    return Settings(
+        database_url=TEST_DATABASE_URL, jwt_secret="test-secret-test-secret-test-secret-0123"
+    )
 
 
 @pytest.fixture
@@ -68,3 +70,14 @@ async def client(test_settings: Settings) -> AsyncIterator[httpx.AsyncClient]:
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
             yield c
+
+
+async def register_user(
+    client: httpx.AsyncClient,
+    email: str = "alice@example.com",
+    password: str = "correct-horse-1",
+) -> dict[str, str]:
+    """Register a user through the API and return its ``Authorization`` headers."""
+    response = await client.post("/api/auth/register", json={"email": email, "password": password})
+    assert response.status_code == 201, response.text
+    return {"Authorization": f"Bearer {response.json()['access_token']}"}
