@@ -127,4 +127,47 @@
   html {
     @apply font-sans;
     }
+  /* Native scrollbars and form controls follow the theme. */
+  :root { color-scheme: light; }
+  .dark { color-scheme: dark; }
+}
+/*
+ * Typography for rendered Markdown in assistant messages. Kept here rather
+ * than pulling in @tailwindcss/typography, so it follows the theme tokens.
+ */
+@layer components {
+  .markdown {
+    @apply text-[0.95rem] leading-7 break-words text-foreground;
+  }
+  .markdown > :first-child { @apply mt-0; }
+  .markdown > :last-child { @apply mb-0; }
+  .markdown p { @apply my-3; }
+  .markdown h1 { @apply mt-6 mb-3 text-xl font-semibold tracking-tight; }
+  .markdown h2 { @apply mt-6 mb-3 text-lg font-semibold tracking-tight; }
+  .markdown h3, .markdown h4 { @apply mt-5 mb-2 text-base font-semibold; }
+  .markdown ul { @apply my-3 list-disc pl-6; }
+  .markdown ol { @apply my-3 list-decimal pl-6; }
+  .markdown li { @apply my-1 pl-1; }
+  .markdown li > ul, .markdown li > ol { @apply my-1; }
+  .markdown a { @apply font-medium underline underline-offset-4 decoration-muted-foreground/50 hover:decoration-foreground; }
+  .markdown strong { @apply font-semibold; }
+  .markdown blockquote { @apply my-4 border-l-2 pl-4 text-muted-foreground; }
+  .markdown hr { @apply my-6; }
+  .markdown :not(pre) > code {
+    @apply rounded-md bg-muted px-1.5 py-0.5 font-mono text-[0.85em];
+  }
+  .markdown pre {
+    @apply my-4 overflow-x-auto rounded-xl border bg-muted/60 p-4 font-mono text-[0.85rem] leading-6;
+  }
+  .markdown table { @apply my-4 block w-full overflow-x-auto border-collapse text-sm; }
+  .markdown th { @apply border-b px-3 py-2 text-left font-semibold; }
+  .markdown td { @apply border-b px-3 py-2 align-top; }
+  .markdown input[type='checkbox'] { @apply mr-1.5 align-middle; }
+
+  /* Blinking caret after the last block while a reply streams in. */
+  .markdown-streaming > :last-child:not(ul, ol, pre, table, blockquote)::after,
+  .markdown-streaming > :is(ul, ol):last-child > li:last-child::after {
+    content: '';
+    @apply ml-0.5 inline-block h-[1.1em] w-[0.45em] translate-y-[0.2em] animate-pulse rounded-[2px] bg-foreground/70;
+  }
 }
