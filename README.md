@@ -82,8 +82,9 @@ uv sync
 uv run alembic upgrade head
 uv run uvicorn app.main:create_app --factory --reload   # http://localhost:8000
 
-# 3. Frontend, in a second terminal (from the repository root)
-cd frontend
+# 3. Frontend (continuing from backend/; in a fresh terminal at the repository
+#    root, use "cd frontend" instead)
+cd ../frontend
 npm ci
 npm run dev                      # http://localhost:5173, proxies /api to :8000
 ```
