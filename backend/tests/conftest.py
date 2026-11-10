@@ -1,13 +1,21 @@
 """Shared pytest fixtures."""
 
+import itertools
+import json
 import os
 from collections.abc import AsyncIterator, Iterator
+from typing import Any
 
 import httpx
 import pytest
 from alembic import command
 from alembic.config import Config
 from asgi_lifespan import LifespanManager
+from fastapi import FastAPI
+from langchain_core.language_models import BaseChatModel
+from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+from langchain_core.messages import AIMessage
+from langgraph.checkpoint.memory import InMemorySaver
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
@@ -63,13 +71,39 @@ def test_settings() -> Settings:
     )
 
 
+FAKE_REPLY = "Hello there"
+
+
 @pytest.fixture
-async def client(test_settings: Settings) -> AsyncIterator[httpx.AsyncClient]:
-    app = create_app(test_settings)
-    async with LifespanManager(app):
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
-            yield c
+def chat_model() -> BaseChatModel:
+    """A fake chat model that answers every message with ``FAKE_REPLY``.
+
+    Override this fixture in a test module to change what the agent says.
+    """
+    return GenericFakeChatModel(messages=itertools.repeat(AIMessage(FAKE_REPLY)))
+
+
+@pytest.fixture
+def checkpointer() -> InMemorySaver:
+    """An in-memory checkpointer, so API tests don't touch the LangGraph tables."""
+    return InMemorySaver()
+
+
+@pytest.fixture
+async def app(
+    test_settings: Settings, chat_model: BaseChatModel, checkpointer: InMemorySaver
+) -> AsyncIterator[FastAPI]:
+    """The app with its lifespan running, wired to the fake model and checkpointer."""
+    application = create_app(test_settings, chat_model=chat_model, checkpointer=checkpointer)
+    async with LifespanManager(application):
+        yield application
+
+
+@pytest.fixture
+async def client(app: FastAPI) -> AsyncIterator[httpx.AsyncClient]:
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+        yield c
 
 
 async def register_user(
@@ -81,3 +115,23 @@ async def register_user(
     response = await client.post("/api/auth/register", json={"email": email, "password": password})
     assert response.status_code == 201, response.text
     return {"Authorization": f"Bearer {response.json()['access_token']}"}
+
+
+def read_sse(response: httpx.Response) -> list[tuple[str, dict[str, Any]]]:
+    """Parse a buffered SSE response body into ``(event, data)`` pairs.
+
+    Events are separated by a blank line; within an event, ``event:`` names it
+    and ``data:`` carries its JSON payload. Comment lines (``: ping``) are skipped.
+    """
+    events: list[tuple[str, dict[str, Any]]] = []
+    body = response.text.replace("\r\n", "\n")
+    for block in body.split("\n\n"):
+        name, data = "message", ""
+        for line in block.split("\n"):
+            if line.startswith("event:"):
+                name = line[len("event:") :].strip()
+            elif line.startswith("data:"):
+                data += line[len("data:") :].strip()
+        if data:
+            events.append((name, json.loads(data)))
+    return events

@@ -4,10 +4,12 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Response, status
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.deps import get_current_user
 from app.auth.models import User
+from app.chat.router import GraphDep
 from app.conversations import service
 from app.conversations.schemas import ConversationCreate, ConversationOut, ConversationUpdate
 from app.db import get_session
@@ -42,7 +44,12 @@ async def rename_conversation(
 
 @router.delete("/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_conversation(
-    conversation_id: UUID, session: SessionDep, user: CurrentUser
+    conversation_id: UUID, session: SessionDep, user: CurrentUser, graph: GraphDep
 ) -> Response:
-    await service.delete_conversation(session, user.id, conversation_id)
+    """Delete the conversation and its chat history (the LangGraph thread)."""
+    await service.delete_conversation(session, user.id, conversation_id)  # 404 if not owned
+    checkpointer = graph.checkpointer
+    if not isinstance(checkpointer, BaseCheckpointSaver):  # build_graph always sets one
+        raise RuntimeError("The agent graph has no checkpointer")
+    await checkpointer.adelete_thread(str(conversation_id))
     return Response(status_code=status.HTTP_204_NO_CONTENT)
