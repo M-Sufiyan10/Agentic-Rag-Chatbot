@@ -5,9 +5,10 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
+from langchain_core.language_models import BaseChatModel
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage, BaseMessage
-from langchain_core.outputs import ChatGenerationChunk, ChatResult
+from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 from langgraph.checkpoint.memory import InMemorySaver
 
 from app.agent.graph import build_graph
@@ -37,6 +38,29 @@ class FailingChatModel(GenericFakeChatModel):
         raise ConnectionError("model server unreachable")
 
 
+class NonStreamingChatModel(BaseChatModel):
+    """A fake model that can only answer in one piece (no ``_stream``/``_astream``).
+
+    Like providers without token streaming: LangGraph's messages mode then
+    emits the whole reply once, as a plain ``AIMessage``.
+    """
+
+    reply: str
+
+    @property
+    def _llm_type(self) -> str:
+        return "non-streaming-fake"
+
+    def _generate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: Any = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        return ChatResult(generations=[ChatGeneration(message=AIMessage(self.reply))])
+
+
 async def _collect(graph: Any, text: str) -> list[tuple[str, dict[str, Any]]]:
     return [
         (event.event or "", json.loads(event.data))
@@ -52,6 +76,16 @@ async def test_stream_yields_tokens_then_done() -> None:
 
     tokens = [data["text"] for name, data in events if name == "token"]
     assert len(tokens) > 1  # streamed in pieces, not as one blob
+    assert "".join(tokens) == "Hello there"
+    assert events[-1] == ("done", {"content": "Hello there"})
+
+
+async def test_stream_non_streaming_model_still_yields_reply() -> None:
+    graph = build_graph(NonStreamingChatModel(reply="Hello there"), InMemorySaver())
+
+    events = await _collect(graph, "hi")
+
+    tokens = [data["text"] for name, data in events if name == "token"]
     assert "".join(tokens) == "Hello there"
     assert events[-1] == ("done", {"content": "Hello there"})
 

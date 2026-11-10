@@ -6,8 +6,9 @@ How the streaming works:
    ``(message_chunk, metadata)`` pairs *while the model is still generating*.
    LangGraph hooks into the chat model's callbacks, so even though our node
    calls ``model.ainvoke(...)``, the model streams and each new token arrives
-   here as an ``AIMessageChunk``. ``metadata`` says which node produced it
-   (``metadata["langgraph_node"]``).
+   here as an ``AIMessageChunk``. (A model without streaming support delivers
+   its whole reply at once as a single ``AIMessage`` instead.) ``metadata``
+   says which node produced it (``metadata["langgraph_node"]``).
 2. Each non-empty text chunk becomes a ``token`` event; when the run ends we
    send one ``done`` event with the full reply. The checkpointer has already
    saved the user message and the reply by then.
@@ -27,7 +28,7 @@ import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
-from langchain_core.messages import AIMessageChunk, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph.state import CompiledStateGraph
 from sse_starlette import ServerSentEvent
@@ -47,10 +48,13 @@ def sse_event(name: str, payload: dict[str, Any]) -> ServerSentEvent:
 def _events_for_chunk(chunk: object, reply_parts: list[str]) -> list[ServerSentEvent]:
     """Map one streamed message chunk to the SSE events it produces.
 
-    Text from AI chunks is appended to ``reply_parts`` (for the final ``done``).
+    Text from AI messages is appended to ``reply_parts`` (for the final ``done``).
+    Streaming models yield many ``AIMessageChunk`` pieces; a model that can't
+    stream yields its whole reply once as a plain ``AIMessage`` (``AIMessageChunk``
+    is a subclass of ``AIMessage``, so one check covers both).
     Anything else (e.g. tool messages in later milestones) produces no events yet.
     """
-    if isinstance(chunk, AIMessageChunk):
+    if isinstance(chunk, AIMessage):
         text = chunk.text
         if text:
             reply_parts.append(text)

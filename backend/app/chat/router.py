@@ -11,6 +11,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.graph.state import CompiledStateGraph
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette import EventSourceResponse, ServerSentEvent
+from starlette.background import BackgroundTask
 
 from app.auth.deps import get_current_user
 from app.auth.models import User
@@ -80,14 +81,18 @@ async def send_message(
 
     async def events() -> AsyncIterator[ServerSentEvent]:
         # sse-starlette closes this generator (running ``finally``) when the
-        # stream ends or the client disconnects, so the id is always released.
+        # stream ends or the client disconnects, so the id is released.
         try:
             async for event in stream_agent_events(graph, str(conversation_id), body.content):
                 yield event
         finally:
             in_progress_conversations.discard(conversation_id)
 
-    return EventSourceResponse(events())
+    # Belt and braces: if the response is cancelled before the generator ever
+    # starts, its ``finally`` never runs, so also release the id in a background
+    # task once the response finishes. ``discard`` is idempotent.
+    release = BackgroundTask(in_progress_conversations.discard, conversation_id)
+    return EventSourceResponse(events(), background=release)
 
 
 @router.get("/{conversation_id}/messages", response_model=list[MessageOut])
