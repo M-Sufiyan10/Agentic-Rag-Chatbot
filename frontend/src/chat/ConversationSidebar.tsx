@@ -1,6 +1,5 @@
 import { useRef, useState } from 'react'
 import type { FormEvent } from 'react'
-import { useQueryClient } from '@tanstack/react-query'
 import { LogOut, MessageSquare, MoreHorizontal, Pencil, SquarePen, Trash2 } from 'lucide-react'
 import { Link, useNavigate } from 'react-router'
 import { useAuth } from '@/auth/AuthProvider'
@@ -227,13 +226,7 @@ function RenameField({ conversation, onDone }: { conversation: Conversation; onD
 
 function AccountFooter() {
   const { user, logout } = useAuth()
-  const queryClient = useQueryClient()
   const email = user?.email ?? ''
-
-  async function handleLogout() {
-    await logout()
-    queryClient.clear() // don't leave this user's chats cached for the next one
-  }
 
   return (
     <div className="flex items-center gap-2.5 border-t px-3 py-3">
@@ -251,7 +244,7 @@ function AccountFooter() {
         size="icon-sm"
         aria-label="Log out"
         title="Log out"
-        onClick={() => void handleLogout()}
+        onClick={() => void logout()}
       >
         <LogOut />
       </Button>

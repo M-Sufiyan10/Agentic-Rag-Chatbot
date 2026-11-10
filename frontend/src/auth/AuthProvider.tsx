@@ -1,3 +1,4 @@
+import { useQueryClient } from '@tanstack/react-query'
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { apiJson, refreshSession, setAccessToken, setOnAuthFailure } from '@/api/client'
@@ -18,12 +19,20 @@ const AuthContext = createContext<AuthContextValue | null>(null)
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [status, setStatus] = useState<Status>('loading')
+  const queryClient = useQueryClient()
 
+  /**
+   * End the session locally. Runs on logout (whether or not the server call
+   * succeeds) and when a token refresh fails. It also empties the query
+   * cache, so the next user on this browser never sees the previous user's
+   * conversations or messages.
+   */
   const clearSession = useCallback(() => {
     setAccessToken(null)
+    queryClient.clear()
     setUser(null)
     setStatus('anonymous')
-  }, [])
+  }, [queryClient])
 
   const applySession = useCallback((body: AuthResponse) => {
     setAccessToken(body.access_token)
@@ -64,6 +73,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       logout: async () => {
         try {
           await apiJson<void>('/api/auth/logout', { method: 'POST' })
+        } catch {
+          // The server call failing (network, 5xx) must not keep the user
+          // signed in here: the local session is ended below regardless.
         } finally {
           clearSession()
         }
