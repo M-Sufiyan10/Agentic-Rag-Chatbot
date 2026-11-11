@@ -6,7 +6,7 @@ A multi-user LLM chatbot built the way a production AI app is built: a **LangGra
 
 The goal is more than "a chat box". Over the roadmap below the agent grows tools, document Q&A (RAG), MCP servers, tracing, and a measured evaluation, because the engineering around the LLM is the point.
 
-> **Status:** Milestones 1 (foundation) and 2 (agent tools) are complete. See the [roadmap](#roadmap).
+> **Status:** Milestones 1 (foundation), 2 (agent tools) and 3 (documents and RAG) are complete. See the [roadmap](#roadmap).
 
 ## Screenshots
 
@@ -14,7 +14,7 @@ The goal is more than "a chat box". Over the roadmap below the agent grows tools
 
 _Screenshots and a demo GIF will be added in Milestone 7._
 
-## What works today (M1 and M2)
+## What works today (M1 to M3)
 
 - **Auth:** register and log in with email and password (argon2 hashes). Short-lived JWT access tokens, with a refresh token held in an httpOnly cookie.
 - **Conversations:** create, list, rename and delete. Every query is scoped to the signed-in user, and another user's conversation returns `404`.
@@ -22,6 +22,7 @@ _Screenshots and a demo GIF will be added in Milestone 7._
 - **Swappable model:** the LLM is chosen by environment variables (Ollama by default).
 - **React UI:** login/register, conversation sidebar, and a chat pane with live streaming and Markdown rendering.
 - **Agent tools (M2):** the agent loops between the model and tools until it can answer. It has a safe `calculator` (an AST evaluator, never `eval`), `current_datetime`, and `web_search` (keyless metasearch via ddgs; see the caveat under Agent settings). The UI shows a live chip per tool call ("Searching the web...") and keeps them on the saved message. A max-rounds guard stops a looping model, long histories are trimmed for the model, a failed or abandoned reply is rolled back so the thread stays valid, and Markdown images in replies are shown as links instead of being fetched.
+- **Documents and RAG (M3):** upload PDF, DOCX, TXT or MD files in a Documents panel. They are ingested in the background (`processing`, then `ready` or `failed` with a reason), chunked, embedded with `nomic-embed-text` and stored in pgvector. The agent's `search_documents` tool searches only the signed-in user's documents (the user id comes from the server, never from the model), and answers show expandable source citations (file, chunk and snippet) that also survive a reload. Another user's document returns `404`.
 - **Quality gates:** pytest (the LLM is always faked in unit tests), ruff, mypy strict, Vitest, oxlint and `tsc`, all run in GitHub Actions.
 
 ## Roadmap
@@ -32,7 +33,7 @@ The full design is in the [spec](docs/superpowers/specs/2026-11-10-agentic-chatb
 | --- | ----------------------- | ----------------------------------------------------------------------------------------------------- |
 | M1  | Foundation & thin slice | Postgres, auth, conversations, streamed chat with a LangGraph agent, React UI, CI (**done**)          |
 | M2  | Agent tools             | Tool loop; calculator, current time, web search; tool-status events and chips in the UI (**done**)    |
-| M3  | Documents & RAG         | Upload PDF/DOCX/TXT/MD, ingestion into pgvector, per-user document search, citations                  |
+| M3  | Documents & RAG         | Upload PDF/DOCX/TXT/MD, ingestion into pgvector, per-user document search, citations (**done**)        |
 | M4  | MCP                     | A custom FastMCP server plus a third-party one, loaded by the agent from config                       |
 | M5  | Observability           | Langfuse tracing tagged by user and conversation, thumbs feedback as scores                           |
 | M6  | Evaluation              | Eval dataset and runner, LLM judge, tool-selection / retrieval / faithfulness metrics, 4B vs 8B model |
@@ -44,7 +45,8 @@ The full design is in the [spec](docs/superpowers/specs/2026-11-10-agentic-chatb
 React (Vite) --POST /api/conversations/{id}/messages--> FastAPI --> LangGraph agent <--> chat model
      ^                                                      |             |   ^
      |                                                      |             |   '--> tools: calculator,
-     |                                                      |             |        current_datetime, web_search
+     |                                                      |             |        current_datetime, web_search,
+     |                                                      |             |        search_documents (pgvector)
      '-- SSE: token, tool_start, tool_end, ..., done -------'             '--> Postgres checkpointer
                                                                               (chat history per thread)
 ```
@@ -52,10 +54,11 @@ React (Vite) --POST /api/conversations/{id}/messages--> FastAPI --> LangGraph ag
 - `backend/app/auth/`: registration, login, refresh, JWT helpers, the `get_current_user` dependency.
 - `backend/app/conversations/`: conversation CRUD (SQLAlchemy 2 async, Alembic migrations).
 - `backend/app/agent/`: the LangGraph graph (`graph.py`), the model factory (`llm.py`), the Postgres checkpointer (`checkpointer.py`), the prompts, and the tools (`tools/`).
+- `backend/app/documents/`: upload API, background ingestion (extract, chunk, embed), pgvector retrieval, and the `reindex` command.
 - `backend/app/chat/`: the send-message endpoint and the graph-to-SSE translation (`streaming.py`).
 - `frontend/src/`: the API client with transparent token refresh (`api/client.ts`), an SSE parser (`api/sse.ts`), and the chat UI (`chat/`).
 
-New to the stack? [`docs/learning/01-foundation.md`](docs/learning/01-foundation.md) walks through how these pieces fit together, and [`docs/learning/02-agent-tools.md`](docs/learning/02-agent-tools.md) explains the tool loop.
+New to the stack? [`docs/learning/01-foundation.md`](docs/learning/01-foundation.md) walks through how these pieces fit together, and [`docs/learning/02-agent-tools.md`](docs/learning/02-agent-tools.md) explains the tool loop, and [`docs/learning/03-documents-rag.md`](docs/learning/03-documents-rag.md) covers embeddings, ingestion, pgvector and per-user isolation.
 
 ## Prerequisites
 
@@ -66,6 +69,7 @@ New to the stack? [`docs/learning/01-foundation.md`](docs/learning/01-foundation
 
   ```bash
   ollama pull qwen3:4b-instruct-2507-q4_K_M
+  ollama pull nomic-embed-text      # embeddings for document search
   ```
 
 ## Quickstart
@@ -130,6 +134,32 @@ These optional variables (all in [`.env.example`](.env.example)) tune the agent:
 | `LLM_MAX_HISTORY_TOKENS`     | `6000`  | Token budget for the history the model sees (the stored one is full) |
 
 **Web search caveat:** `web_search` relies on a third-party, keyless metasearch library (ddgs) scraping public engines, so it can be slow, rate-limited or fail; the agent then tells the user the search failed. Some engines return nothing from some networks, so try another `WEB_SEARCH_BACKEND` (default `duckduckgo,brave,yahoo,startpage`; unknown engine names are rejected at startup) if results are empty.
+
+## Documents settings
+
+Supported uploads are `.pdf`, `.docx`, `.txt` and `.md`, up to `MAX_UPLOAD_MB` (default 10; larger files get `413`, unsupported or mismatched files `415`). Scanned PDFs with no text layer are marked `failed`. Uploaded files are stored under `UPLOAD_DIR` (gitignored) and never served back. These optional variables are in [`.env.example`](.env.example):
+
+| Variable               | Default            | Meaning                                                         |
+| ---------------------- | ------------------ | --------------------------------------------------------------- |
+| `EMBEDDING_PROVIDER`   | `ollama`           | Provider name for LangChain's `init_embeddings`                 |
+| `EMBEDDING_MODEL`      | `nomic-embed-text` | Embedding model                                                 |
+| `EMBEDDING_DIMENSIONS` | `768`              | Vector size; fixes the column size when the migration runs      |
+| `UPLOAD_DIR`           | `./data/uploads`   | Where uploaded files are stored                                 |
+| `MAX_UPLOAD_MB`        | `10`               | Upload size limit                                               |
+| `CHUNK_SIZE`           | `1000`             | Characters per chunk                                            |
+| `CHUNK_OVERLAP`        | `150`              | Characters shared between neighbouring chunks                   |
+| `RETRIEVAL_K`          | `4`                | Chunks returned per search (no reranking)                       |
+
+**Changing the embedding model:** each chunk remembers the model that embedded it, and search only uses chunks from the configured model (it tells the model when some were skipped). After changing `EMBEDDING_MODEL` or `EMBEDDING_DIMENSIONS`, re-embed everything, resizing the vector column if needed:
+
+```bash
+cd backend
+uv run python -m app.documents.reindex
+```
+
+It exits non-zero if any document fails; fix the cause and run it again.
+
+A small model may not always choose to call `search_documents`; naming "my documents" in the question helps.
 
 ## Running the tests
 
