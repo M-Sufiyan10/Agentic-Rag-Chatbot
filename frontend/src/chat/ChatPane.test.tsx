@@ -20,11 +20,15 @@ function sseResponse(frames: Frame[], pauseMs = 30): HttpResponse<ReadableStream
       controller.close()
     },
   })
-  return new HttpResponse(body, { headers: { 'content-type': 'text/event-stream' } })
+  return new HttpResponse(body, {
+    headers: { 'content-type': 'text/event-stream' },
+  })
 }
 
 function renderPane() {
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
   return render(
     <QueryClientProvider client={queryClient}>
       <ChatPane conversationId="c1" />
@@ -74,7 +78,9 @@ describe('ChatPane', () => {
         return sseResponse([
           {
             event: 'error',
-            data: { message: "The assistant couldn't respond. Please try again." },
+            data: {
+              message: "The assistant couldn't respond. Please try again.",
+            },
           },
         ])
       }),
@@ -157,7 +163,9 @@ describe('ChatPane', () => {
         return sseResponse([{ event: 'token', data: { text: 'Hel' } }], 200)
       }),
     )
-    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
     render(
       <StrictMode>
         <QueryClientProvider client={queryClient}>
@@ -169,5 +177,65 @@ describe('ChatPane', () => {
     await queryClient.refetchQueries({ queryKey: ['messages', 'c1'] })
     expect(screen.getByText('Hi there')).toBeVisible()
     expect(posts).toBe(1)
+  })
+
+  it('shows a running tool chip, then marks it done, then streams the answer', async () => {
+    server.use(
+      http.get('*/api/conversations/c1/messages', () => HttpResponse.json([])),
+      http.post('*/api/conversations/c1/messages', () =>
+        sseResponse(
+          [
+            {
+              event: 'tool_start',
+              data: { id: 'c1', name: 'web_search', input: { query: 'x' } },
+            },
+            {
+              event: 'tool_end',
+              data: { id: 'c1', name: 'web_search', output: 'r' },
+            },
+            { event: 'token', data: { text: 'Answer' } },
+            { event: 'done', data: { content: 'Answer' } },
+          ],
+          150,
+        ),
+      ),
+    )
+    renderPane()
+    await typeAndSend('hi')
+
+    expect(await screen.findByText('Searching the web…')).toBeVisible()
+    expect(await screen.findByText('Searched the web')).toBeVisible()
+    expect(await screen.findByText('Answer')).toBeVisible()
+  })
+
+  it('shows tool chips on assistant messages loaded from history', async () => {
+    server.use(
+      http.get('*/api/conversations/c1/messages', () =>
+        HttpResponse.json([
+          { role: 'user', content: 'q', tools: [] },
+          { role: 'assistant', content: 'a', tools: ['calculator'] },
+        ]),
+      ),
+    )
+    renderPane()
+    expect(await screen.findByText('Calculated')).toBeVisible()
+  })
+
+  it('ignores malformed tool events', async () => {
+    server.use(
+      http.get('*/api/conversations/c1/messages', () => HttpResponse.json([])),
+      http.post('*/api/conversations/c1/messages', () =>
+        sseResponse([
+          { event: 'tool_start', data: {} },
+          { event: 'token', data: { text: 'Fine' } },
+          { event: 'done', data: { content: 'Fine' } },
+        ]),
+      ),
+    )
+    renderPane()
+    await typeAndSend('hi')
+
+    expect(await screen.findByText('Fine')).toBeVisible()
+    expect(screen.queryByText(/Calling/)).toBeNull()
   })
 })

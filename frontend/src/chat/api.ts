@@ -14,7 +14,7 @@ export type Conversation = {
   updated_at: string
 }
 
-export type ChatMessage = { role: 'user' | 'assistant'; content: string }
+export type ChatMessage = { role: 'user' | 'assistant'; content: string; tools?: string[] }
 
 export const conversationsKey = ['conversations'] as const
 export const messagesKey = (id: string) => ['messages', id] as const

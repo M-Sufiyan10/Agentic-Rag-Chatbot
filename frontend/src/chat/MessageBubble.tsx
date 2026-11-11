@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { Sparkles } from 'lucide-react'
+import { ImageOff, Sparkles } from 'lucide-react'
 import Markdown from 'react-markdown'
 import type { Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -11,8 +11,8 @@ type Props = {
   /** True while the reply is still arriving; shows a blinking caret. */
   streaming?: boolean
   /**
-   * Extra content rendered under an assistant reply. Later milestones put
-   * tool-status chips and citations here.
+   * Extra content rendered under an assistant reply. Tool-status chips (and later
+   * citations) go here.
    */
   children?: ReactNode
 }
@@ -20,6 +20,21 @@ type Props = {
 /** Links in model output open in a new tab and never get window.opener. */
 const markdownComponents: Components = {
   a: ({ node: _node, ...props }) => <a {...props} target="_blank" rel="noopener noreferrer" />,
+  // Never create an <img> from model output: the browser would fetch the URL
+  // automatically, and whoever controls it could receive leaked data (e.g. a
+  // prompt injection in a web result telling the model to encode secrets into
+  // an image URL). Show a link instead; the reader decides whether to open it.
+  img: ({ node: _node, src, alt }) => (
+    <a
+      href={typeof src === 'string' ? src : undefined}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="inline-flex items-center gap-1"
+    >
+      <ImageOff className="size-3.5" aria-hidden />
+      {alt || 'image'}
+    </a>
+  ),
 }
 
 /**

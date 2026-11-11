@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { useMessages } from './api'
 import MessageBubble, { AssistantAvatar } from './MessageBubble'
+import ToolChips from './ToolChips'
 import { useChatStream } from './useChatStream'
 
 type Props = {
@@ -19,9 +20,11 @@ type Props = {
 /** The transcript and composer for one conversation. */
 export default function ChatPane({ conversationId, initialMessage, onInitialMessageSent }: Props) {
   const messages = useMessages(conversationId)
-  const { streamingText, pendingMessage, status, error, send } = useChatStream(conversationId)
+  const { streamingText, tools, pendingMessage, status, error, send } =
+    useChatStream(conversationId)
   const [lastSent, setLastSent] = useState<string | null>(null)
   const busy = status === 'waiting' || status === 'streaming'
+  const toolRunning = tools.some((t) => t.status === 'running')
 
   function sendMessage(content: string) {
     setLastSent(content)
@@ -44,7 +47,7 @@ export default function ChatPane({ conversationId, initialMessage, onInitialMess
   const last = history.at(-1)
   const showPending =
     pendingMessage !== null && !(last?.role === 'user' && last.content === pendingMessage)
-  const scroll = useAutoScroll([history.length, streamingText, status])
+  const scroll = useAutoScroll([history.length, streamingText, tools, status])
 
   if (messages.isError && !busy) {
     const notFound = messages.error instanceof ApiError && messages.error.status === 404
@@ -76,10 +79,17 @@ export default function ChatPane({ conversationId, initialMessage, onInitialMess
           >
             {messages.isPending && <TranscriptSkeleton />}
             {history.map((m, i) => (
-              <MessageBubble key={i} role={m.role} content={m.content} />
+              <MessageBubble key={i} role={m.role} content={m.content}>
+                {m.tools?.length ? <ToolChips names={m.tools} /> : null}
+              </MessageBubble>
             ))}
             {showPending && <MessageBubble role="user" content={pendingMessage} />}
-            {status === 'waiting' && <ThinkingIndicator />}
+            {busy && tools.length > 0 && (
+              <div className="pl-10 sm:pl-11">
+                <ToolChips tools={tools} />
+              </div>
+            )}
+            {busy && !streamingText && !toolRunning && <ThinkingIndicator />}
             {status === 'streaming' && streamingText && (
               <MessageBubble role="assistant" content={streamingText} streaming />
             )}
@@ -183,9 +193,9 @@ export function Composer({ onSend, disabled = false, autoFocus = false }: Compos
 }
 
 const SUGGESTIONS = [
-  'Explain LangGraph in two sentences',
-  "What's the difference between RAG and fine-tuning?",
-  'Write a haiku about vector databases',
+  "What's today's date in Tokyo?",
+  'Search the web for the latest LangGraph release',
+  'What is 18% of 2,450, plus 75?',
 ]
 
 /** Empty-state greeting with a few starter prompts. */
