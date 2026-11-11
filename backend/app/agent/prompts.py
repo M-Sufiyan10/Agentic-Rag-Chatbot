@@ -1,5 +1,13 @@
 """Prompt text for the chat agent."""
 
+import json
+import unicodedata
+from collections.abc import Mapping
+from typing import Any
+
+PROMPT_DOCUMENT_LIMIT = 20
+PROMPT_FILENAME_LENGTH = 80
+
 SYSTEM_PROMPT = (
     "You are a friendly, helpful general-purpose assistant. "
     "Answer clearly and concisely. "
@@ -18,3 +26,44 @@ FINAL_ROUND_INSTRUCTION = (
     "You have used the maximum number of tool calls for this message. "
     "Answer now using the information you already have, and say if anything is missing."
 )
+
+DOCUMENTS_READY_NOTE = (
+    "The user has uploaded these documents, which you can search with search_documents: "
+    "{names}{more}. If a question might be answered by them, call search_documents before "
+    "answering. Never say you cannot access the user's documents."
+)
+DOCUMENTS_PROCESSING_NOTE = (
+    "The user's uploaded documents are still being processed and can't be searched yet. "
+    "If they ask about them, say so."
+)
+
+# Control characters plus the Unicode line and paragraph separators.
+_UNSAFE_CATEGORIES = {"Cc", "Zl", "Zp"}
+
+
+def _quoted_filename(name: str) -> str:
+    """A filename made safe for the system prompt: no control characters, short, JSON-quoted."""
+    clean = "".join(ch for ch in name if unicodedata.category(ch) not in _UNSAFE_CATEGORIES)
+    return json.dumps(clean[:PROMPT_FILENAME_LENGTH], ensure_ascii=False)
+
+
+def documents_note(documents: Mapping[str, Any] | None) -> str | None:
+    """The per-turn note about the user's documents, or ``None`` if there is nothing to say.
+
+    ``documents`` is ``{"ready": [filename, ...], "ready_total": int, "processing": int}``
+    for the authenticated user (see ``app.documents.retrieval.document_overview``).
+    Filenames are user-controlled, so each one is cleaned and JSON-quoted.
+    """
+    if not documents:
+        return None
+    ready = [str(name) for name in documents.get("ready", [])]
+    if ready:
+        shown = ready[:PROMPT_DOCUMENT_LIMIT]
+        hidden = max(int(documents.get("ready_total", 0)), len(ready)) - len(shown)
+        return DOCUMENTS_READY_NOTE.format(
+            names=", ".join(_quoted_filename(name) for name in shown),
+            more=f" (and {hidden} more)" if hidden else "",
+        )
+    if documents.get("processing"):
+        return DOCUMENTS_PROCESSING_NOTE
+    return None

@@ -10,6 +10,7 @@ from starlette.datastructures import UploadFile
 
 from app.config import Settings
 from app.documents.models import Document, DocumentChunk
+from app.documents.service import clean_filename
 from tests.conftest import register_user
 
 TEXT = b"The quick brown fox jumps over the lazy dog. " * 20
@@ -136,3 +137,30 @@ async def test_filename_is_basename_only(client: httpx.AsyncClient) -> None:
     response = await upload(client, headers, "../../evil.txt", TEXT)
     assert response.status_code == 201
     assert response.json()["filename"] == "evil.txt"
+
+
+def test_clean_filename_drops_control_characters() -> None:
+    assert clean_filename("a\x00b\n\r\t\x1b.txt") == "ab.txt"
+    assert clean_filename("\x00\n") == "document"
+
+
+async def test_control_characters_in_filename_are_dropped(client: httpx.AsyncClient) -> None:
+    # httpx percent-encodes control characters in filenames, so send raw bytes.
+    headers = await register_user(client)
+    boundary = "testboundary"
+    body = (
+        (
+            f"--{boundary}\r\n"
+            'Content-Disposition: form-data; name="file"; filename="a\x00b\n.txt"\r\n'
+            "Content-Type: text/plain\r\n\r\n"
+        ).encode()
+        + TEXT
+        + f"\r\n--{boundary}--\r\n".encode()
+    )
+    response = await client.post(
+        "/api/documents",
+        headers={**headers, "Content-Type": f"multipart/form-data; boundary={boundary}"},
+        content=body,
+    )
+    assert response.status_code == 201, response.text
+    assert response.json()["filename"] == "ab.txt"

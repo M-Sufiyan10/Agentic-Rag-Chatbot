@@ -205,13 +205,21 @@ async def roll_back_incomplete_turn(
 
 
 async def stream_agent_events(
-    graph: CompiledStateGraph[Any, Any, Any, Any], thread_id: str, user_text: str, user_id: str
+    graph: CompiledStateGraph[Any, Any, Any, Any],
+    thread_id: str,
+    user_text: str,
+    user_id: str,
+    documents: dict[str, Any] | None = None,
 ) -> AsyncGenerator[ServerSentEvent]:
     """Run the agent on ``user_text`` in thread ``thread_id`` and yield SSE events.
 
     ``user_id`` is the authenticated user's id. It goes into the run config
     (``configurable.user_id``), where per-user tools such as
     ``search_documents`` read it; it is never taken from the model.
+    ``documents`` (the user's document overview, or ``None``) goes into
+    ``configurable.documents`` for the agent's per-turn documents note. It must
+    stay one nested dict: LangGraph copies top-level scalar configurable values
+    into checkpoint metadata, but not dicts.
 
     Only the *new* user message is sent: the checkpointer loads the earlier
     history of ``thread_id`` before the graph runs and saves the result after.
@@ -221,7 +229,10 @@ async def stream_agent_events(
     failure, one ``error`` event (``{"message": ...}``) instead of ``done``.
     See the module docstring for the exact mapping and the rollback rules.
     """
-    config: RunnableConfig = {"configurable": {"thread_id": thread_id, "user_id": user_id}}
+    configurable: dict[str, Any] = {"thread_id": thread_id, "user_id": user_id}
+    if documents is not None:
+        configurable["documents"] = documents
+    config: RunnableConfig = {"configurable": configurable}
     reply_parts: list[str] = []
     citations: list[dict[str, Any]] = []
     human_message = HumanMessage(user_text, id=str(uuid4()))

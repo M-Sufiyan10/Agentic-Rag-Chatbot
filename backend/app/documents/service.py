@@ -1,5 +1,6 @@
 """Document data access and upload validation. Every query is scoped to the owning user."""
 
+import unicodedata
 import uuid
 from pathlib import PurePosixPath
 from uuid import UUID
@@ -17,8 +18,13 @@ _SNIFF_BYTES = 8192
 
 
 def clean_filename(raw: str | None) -> str:
-    """Basename only (either path separator), at most 255 characters."""
-    name = PurePosixPath((raw or "").replace("\\", "/")).name
+    """Basename only (either path separator), no control characters, at most 255 characters.
+
+    Control characters (NUL, newlines, ...) are dropped: Postgres rejects NUL in
+    text, and filenames are shown to the model in its system prompt.
+    """
+    printable = "".join(ch for ch in (raw or "") if unicodedata.category(ch) != "Cc")
+    name = PurePosixPath(printable.replace("\\", "/")).name
     return (name or "document")[:255]
 
 

@@ -80,3 +80,39 @@ async def count_mismatched_chunks(
         )
     )
     return count or 0
+
+
+async def count_documents(session: AsyncSession, *, user_id: uuid.UUID, status: str) -> int:
+    """Count the user's documents with ``status``."""
+    count = await session.scalar(
+        select(func.count())
+        .select_from(Document)
+        .where(Document.user_id == user_id, Document.status == status)
+    )
+    return count or 0
+
+
+@dataclass(frozen=True)
+class DocumentOverview:
+    """What the agent is told about the user's documents at the start of a turn."""
+
+    ready: list[str]  # filenames of ready documents, newest first, at most ``limit``
+    ready_total: int
+    processing: int
+
+
+async def document_overview(
+    session: AsyncSession, *, user_id: uuid.UUID, limit: int
+) -> DocumentOverview:
+    """The user's ready filenames (newest first, at most ``limit``) and status counts."""
+    ready = await session.scalars(
+        select(Document.filename)
+        .where(Document.user_id == user_id, Document.status == "ready")
+        .order_by(Document.created_at.desc())
+        .limit(limit)
+    )
+    return DocumentOverview(
+        ready=list(ready),
+        ready_total=await count_documents(session, user_id=user_id, status="ready"),
+        processing=await count_documents(session, user_id=user_id, status="processing"),
+    )

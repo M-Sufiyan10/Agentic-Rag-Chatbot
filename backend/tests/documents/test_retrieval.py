@@ -7,7 +7,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.models import User
 from app.documents.models import Document, DocumentChunk
-from app.documents.retrieval import count_mismatched_chunks, search_chunks
+from app.documents.retrieval import (
+    DocumentOverview,
+    count_mismatched_chunks,
+    document_overview,
+    search_chunks,
+)
 
 MODEL = "nomic-embed-text"
 
@@ -134,3 +139,26 @@ async def test_processing_document_is_excluded(
     )
 
     assert results == []
+
+
+async def test_document_overview_is_scoped_newest_first_and_limited(
+    db_session: AsyncSession, embeddings: Embeddings
+) -> None:
+    alice, bob = await _user(db_session), await _user(db_session)
+    for name in ["a.txt", "b.txt", "c.txt"]:
+        await _document_with_chunk(db_session, embeddings, alice, name, filename=name)
+    await _document_with_chunk(db_session, embeddings, alice, "p", status="processing")
+    await _document_with_chunk(db_session, embeddings, alice, "f", status="failed")
+    await _document_with_chunk(db_session, embeddings, bob, "secret", filename="bob.txt")
+
+    overview = await document_overview(db_session, user_id=alice.id, limit=2)
+
+    assert overview == DocumentOverview(ready=["c.txt", "b.txt"], ready_total=3, processing=1)
+
+
+async def test_document_overview_without_documents(db_session: AsyncSession) -> None:
+    alice = await _user(db_session)
+
+    overview = await document_overview(db_session, user_id=alice.id, limit=20)
+
+    assert overview == DocumentOverview(ready=[], ready_total=0, processing=0)

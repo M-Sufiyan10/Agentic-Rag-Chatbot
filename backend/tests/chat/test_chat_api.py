@@ -9,14 +9,19 @@ import pytest
 from fastapi import FastAPI
 from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
-from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.messages import AIMessage, BaseMessage, SystemMessage
 from langchain_core.outputs import ChatGenerationChunk
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import InMemorySaver
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.graph import build_graph
+from app.agent.prompts import DOCUMENTS_PROCESSING_NOTE, SYSTEM_PROMPT
+from app.auth.models import User
 from app.chat import deps as chat_deps
 from app.chat import router as chat_router
+from app.documents.models import Document
 from tests.conftest import FAKE_REPLY, read_sse, register_user
 from tests.fakes import ScriptedChatModel, echo, fake_search_documents, tool_call_reply, whoami
 
@@ -271,3 +276,62 @@ async def test_citations_streamed_and_listed_in_transcript(client: httpx.AsyncCl
     assert [c["chunk_index"] for c in assistant["citations"]] == [0, 1]
     assert assistant["citations"][0]["filename"] == "notes.txt"
     assert assistant["tools"] == ["search_documents", "search_documents"]
+
+
+async def _add_document(db: AsyncSession, email: str, filename: str, status: str) -> None:
+    user = await db.scalar(select(User).where(User.email == email))
+    assert user is not None
+    db.add(
+        Document(
+            user_id=user.id,
+            filename=filename,
+            content_type="text/markdown",
+            size_bytes=1,
+            storage_key=f"{user.id}/{uuid.uuid4()}.md",
+            status=status,
+        )
+    )
+    await db.commit()
+
+
+def _system_prompt(messages: list[BaseMessage]) -> str:
+    assert isinstance(messages[0], SystemMessage)
+    return str(messages[0].content)
+
+
+@pytest.mark.parametrize(
+    "chat_model", [ScriptedChatModel(replies=[AIMessage("for bob"), AIMessage("for alice")])]
+)
+async def test_documents_note_lists_only_the_senders_documents(
+    client: httpx.AsyncClient, db_session: AsyncSession, chat_model: ScriptedChatModel
+) -> None:
+    alice = await register_user(client, email="alice@example.com")
+    bob = await register_user(client, email="bob@example.com")
+    await _add_document(db_session, "alice@example.com", "alpha-secret.md", "ready")
+    bob_cid = await _new_conversation(client, bob)
+    alice_cid = await _new_conversation(client, alice)
+
+    await client.post(_messages_url(bob_cid), json={"content": "what's in it?"}, headers=bob)
+    await client.post(_messages_url(alice_cid), json={"content": "what's in it?"}, headers=alice)
+
+    bob_prompt, alice_prompt = (_system_prompt(call) for call in chat_model.calls)
+    assert bob_prompt == SYSTEM_PROMPT
+    assert "alpha-secret" not in bob_prompt
+    assert alice_prompt.startswith(SYSTEM_PROMPT + "\n\n")
+    assert '"alpha-secret.md"' in alice_prompt
+
+
+@pytest.mark.parametrize("chat_model", [ScriptedChatModel(replies=[AIMessage("wait")])])
+async def test_documents_note_for_processing_only(
+    client: httpx.AsyncClient, db_session: AsyncSession, chat_model: ScriptedChatModel
+) -> None:
+    headers = await register_user(client, email="alice@example.com")
+    await _add_document(db_session, "alice@example.com", "big.pdf", "processing")
+    await _add_document(db_session, "alice@example.com", "scan.pdf", "failed")
+    cid = await _new_conversation(client, headers)
+
+    await client.post(_messages_url(cid), json={"content": "summarise it"}, headers=headers)
+
+    assert _system_prompt(chat_model.calls[0]) == (
+        SYSTEM_PROMPT + "\n\n" + DOCUMENTS_PROCESSING_NOTE
+    )

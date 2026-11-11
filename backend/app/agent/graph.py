@@ -32,6 +32,16 @@ Two guards live inside the `agent` node:
 The system prompt is prepended inside the node on every call and is never
 written to state, so it is not duplicated in the checkpoint and can be changed
 without touching stored conversations.
+
+**Documents note.** A small model's prior ("I can't see your files") beats a
+static instruction to use `search_documents`, so each turn the server tells it
+which documents *this* user has. The chat endpoint looks them up for the
+authenticated user and passes them as one nested dict,
+`config["configurable"]["documents"]`; the node appends
+`prompts.documents_note(...)` to the same system message. Being a dict matters:
+LangGraph copies top-level `str`/`int`/`float`/`bool` configurable values into
+every checkpoint's metadata, but not dicts, so filenames never reach the
+checkpoint. Users without ready or processing documents get the plain prompt.
 """
 
 from collections.abc import Sequence
@@ -46,13 +56,14 @@ from langchain_core.messages import (
     trim_messages,
 )
 from langchain_core.messages.utils import count_tokens_approximately
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode
 
-from app.agent.prompts import FINAL_ROUND_INSTRUCTION, SYSTEM_PROMPT
+from app.agent.prompts import FINAL_ROUND_INSTRUCTION, SYSTEM_PROMPT, documents_note
 
 
 def _tool_rounds_this_turn(messages: Sequence[BaseMessage]) -> int:
@@ -109,9 +120,13 @@ def build_graph(
     # Bound once at build time; with no tools the plain model is used (bind_tools never called).
     tool_model: Any = model.bind_tools(list(tools)) if tools else model
 
-    async def agent(state: MessagesState) -> dict[str, list[BaseMessage]]:
+    async def agent(state: MessagesState, config: RunnableConfig) -> dict[str, list[BaseMessage]]:
         history = _trim_history(state["messages"], max_history_tokens)
-        prompt: list[BaseMessage] = [SystemMessage(SYSTEM_PROMPT), *history]
+        system = SYSTEM_PROMPT
+        note = documents_note((config.get("configurable") or {}).get("documents"))
+        if note:
+            system += "\n\n" + note
+        prompt: list[BaseMessage] = [SystemMessage(system), *history]
         if tools and _tool_rounds_this_turn(state["messages"]) >= max_tool_rounds:
             response = await model.ainvoke([*prompt, SystemMessage(FINAL_ROUND_INSTRUCTION)])
         else:

@@ -1,5 +1,6 @@
 """Chat endpoints: send a message (streamed reply over SSE) and read the history."""
 
+import dataclasses
 from collections.abc import AsyncIterator
 from contextlib import aclosing
 from datetime import UTC, datetime
@@ -13,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette import EventSourceResponse, ServerSentEvent
 from starlette.background import BackgroundTask
 
+from app.agent.prompts import PROMPT_DOCUMENT_LIMIT
 from app.auth.deps import get_current_user
 from app.auth.models import User
 from app.chat.deps import Graph, GraphDep, in_progress_conversations
@@ -21,6 +23,7 @@ from app.chat.streaming import citation_items, dedupe_citations, stream_agent_ev
 from app.conversations.models import Conversation
 from app.conversations.service import get_owned_conversation
 from app.db import get_session
+from app.documents.retrieval import document_overview
 
 router = APIRouter(prefix="/conversations", tags=["chat"])
 
@@ -40,7 +43,11 @@ async def _record_new_message(session: AsyncSession, conversation: Conversation,
 
 
 async def stream_and_release(
-    graph: Graph, conversation_id: UUID, text: str, user_id: str
+    graph: Graph,
+    conversation_id: UUID,
+    text: str,
+    user_id: str,
+    documents: dict[str, Any] | None = None,
 ) -> AsyncIterator[ServerSentEvent]:
     """Stream the agent's events, then release ``conversation_id``.
 
@@ -53,7 +60,7 @@ async def stream_and_release(
     """
     try:
         async with aclosing(
-            stream_agent_events(graph, str(conversation_id), text, user_id)
+            stream_agent_events(graph, str(conversation_id), text, user_id, documents)
         ) as events:
             async for event in events:
                 yield event
@@ -76,6 +83,8 @@ async def send_message(
     (200) has already been sent and errors can only be reported as events.
     """
     conversation = await get_owned_conversation(session, user.id, conversation_id)
+    # The authenticated user's own documents, for the agent's per-turn note.
+    overview = await document_overview(session, user_id=user.id, limit=PROMPT_DOCUMENT_LIMIT)
     # No ``await`` between this check and the ``add`` below, so two requests
     # on the event loop cannot both pass the check.
     if conversation_id in in_progress_conversations:
@@ -92,7 +101,9 @@ async def send_message(
     # task once the response finishes. ``discard`` is idempotent.
     release = BackgroundTask(in_progress_conversations.discard, conversation_id)
     return EventSourceResponse(
-        stream_and_release(graph, conversation_id, body.content, str(user.id)),
+        stream_and_release(
+            graph, conversation_id, body.content, str(user.id), dataclasses.asdict(overview)
+        ),
         background=release,
     )
 

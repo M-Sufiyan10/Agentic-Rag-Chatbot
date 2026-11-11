@@ -116,3 +116,36 @@ def test_system_prompt_mentions_tools() -> None:
     assert "web_search" in SYSTEM_PROMPT
     assert "current_datetime" in SYSTEM_PROMPT
     assert "calculator" in SYSTEM_PROMPT
+
+
+async def test_documents_note_is_in_the_system_prompt_only() -> None:
+    model = ScriptedChatModel(
+        replies=[tool_call_reply("echo", {"text": "a"}, "c1"), AIMessage("final")]
+    )
+    graph = build_graph(model, InMemorySaver(), [echo])
+    documents = {"ready": ["zephyr-secret.md"], "ready_total": 1, "processing": 0}
+    config: RunnableConfig = {"configurable": {"thread_id": "t1", "documents": documents}}
+
+    await graph.ainvoke({"messages": [HumanMessage("x")]}, config)
+
+    for call in model.calls:  # every model call in the turn, not just the first
+        system = [m for m in call if isinstance(m, SystemMessage)]
+        assert system == [call[0]]
+        assert str(call[0].content).startswith(SYSTEM_PROMPT + "\n\n")
+        assert '"zephyr-secret.md"' in str(call[0].content)
+    snapshot = await graph.aget_state(cfg("t1"))
+    assert not any(isinstance(m, SystemMessage) for m in snapshot.values["messages"])
+    async for checkpoint in graph.aget_state_history(cfg("t1")):
+        assert "zephyr-secret" not in repr(checkpoint.metadata)
+        assert "zephyr-secret" not in repr(checkpoint.values)
+
+
+async def test_no_documents_keeps_the_plain_system_prompt() -> None:
+    model = ScriptedChatModel(replies=[AIMessage("hi")])
+    graph = build_graph(model, InMemorySaver())
+    empty = {"ready": [], "ready_total": 0, "processing": 0}
+    config: RunnableConfig = {"configurable": {"thread_id": "t1", "documents": empty}}
+
+    await graph.ainvoke({"messages": [HumanMessage("x")]}, config)
+
+    assert model.calls[0][0] == SystemMessage(SYSTEM_PROMPT)

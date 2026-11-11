@@ -14,12 +14,15 @@ from typing import Any
 from langchain_core.embeddings import Embeddings
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, tool
-from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import Settings
-from app.documents.models import Document
-from app.documents.retrieval import RetrievedChunk, count_mismatched_chunks, search_chunks
+from app.documents.retrieval import (
+    RetrievedChunk,
+    count_documents,
+    count_mismatched_chunks,
+    search_chunks,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -49,15 +52,6 @@ def _citation(chunk: RetrievedChunk) -> Citation:
         "chunk_index": chunk.chunk_index,
         "snippet": snippet(chunk.content),
     }
-
-
-async def _count_documents(session: AsyncSession, user_id: uuid.UUID, status: str) -> int:
-    count = await session.scalar(
-        select(func.count())
-        .select_from(Document)
-        .where(Document.user_id == user_id, Document.status == status)
-    )
-    return count or 0
 
 
 def make_search_documents_tool(
@@ -98,8 +92,10 @@ def make_search_documents_tool(
                 if chunks:
                     processing = ready = 0
                 else:
-                    processing = await _count_documents(session, user_id, "processing")
-                    ready = await _count_documents(session, user_id, "ready")
+                    processing = await count_documents(
+                        session, user_id=user_id, status="processing"
+                    )
+                    ready = await count_documents(session, user_id=user_id, status="ready")
         except Exception:
             logger.exception("Document search failed")
             return SEARCH_FAILED, []
