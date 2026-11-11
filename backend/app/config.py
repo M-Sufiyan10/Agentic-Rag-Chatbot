@@ -28,6 +28,14 @@ class Settings(BaseSettings):
     web_search_max_results: int = 5
     web_search_timeout_seconds: int = 10
     web_search_backend: str = "duckduckgo,brave,yahoo,startpage"
+    embedding_provider: str = "ollama"
+    embedding_model: str = "nomic-embed-text"
+    embedding_dimensions: int = 768
+    upload_dir: str = "./data/uploads"
+    max_upload_mb: int = 10
+    chunk_size: int = 1000
+    chunk_overlap: int = 150
+    retrieval_k: int = 4
 
     @field_validator("web_search_backend")
     @classmethod
