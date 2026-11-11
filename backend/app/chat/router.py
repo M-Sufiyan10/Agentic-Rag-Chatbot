@@ -3,19 +3,19 @@
 from collections.abc import AsyncIterator
 from contextlib import aclosing
 from datetime import UTC, datetime
-from typing import Annotated, Any
+from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
-from langgraph.graph.state import CompiledStateGraph
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette import EventSourceResponse, ServerSentEvent
 from starlette.background import BackgroundTask
 
 from app.auth.deps import get_current_user
 from app.auth.models import User
+from app.chat.deps import Graph, GraphDep, in_progress_conversations
 from app.chat.schemas import MessageIn, MessageOut
 from app.chat.streaming import stream_agent_events
 from app.conversations.models import Conversation
@@ -27,23 +27,8 @@ router = APIRouter(prefix="/conversations", tags=["chat"])
 DEFAULT_TITLE = "New chat"
 TITLE_LENGTH = 60
 
-# Conversations whose reply is currently streaming. One reply at a time per
-# conversation: two concurrent runs on the same LangGraph thread would race on
-# its checkpoints. Process-local, which is enough for a single-process server.
-in_progress_conversations: set[UUID] = set()
-
-Graph = CompiledStateGraph[Any, Any, Any, Any]
-
-
-def get_graph(request: Request) -> Graph:
-    """Return the compiled agent graph built in the app lifespan (``app.state.graph``)."""
-    graph: Graph = request.app.state.graph
-    return graph
-
-
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 CurrentUser = Annotated[User, Depends(get_current_user)]
-GraphDep = Annotated[Graph, Depends(get_graph)]
 
 
 async def _record_new_message(session: AsyncSession, conversation: Conversation, text: str) -> None:
@@ -115,18 +100,25 @@ async def get_messages(
 ) -> list[MessageOut]:
     """Return the conversation transcript, read from the checkpointed graph state.
 
-    Only user and assistant messages with text are returned (no system prompt,
-    and in later milestones no tool calls/results). A new thread returns ``[]``.
+    Only user and assistant messages with text are returned. Each assistant
+    message lists the tools called since the previous user message. A new
+    thread returns ``[]``.
     """
     await get_owned_conversation(session, user.id, conversation_id)
     config: RunnableConfig = {"configurable": {"thread_id": str(conversation_id)}}
     snapshot = await graph.aget_state(config)
     transcript: list[MessageOut] = []
+    tools_used: list[str] = []
     for message in snapshot.values.get("messages", []):
-        if not isinstance(message.content, str) or not message.content:
-            continue
         if isinstance(message, HumanMessage):
-            transcript.append(MessageOut(role="user", content=message.content))
+            tools_used = []
+            if isinstance(message.content, str) and message.content:
+                transcript.append(MessageOut(role="user", content=message.content))
         elif isinstance(message, AIMessage):
-            transcript.append(MessageOut(role="assistant", content=message.content))
+            tools_used.extend(call["name"] for call in message.tool_calls)
+            if isinstance(message.content, str) and message.content:
+                transcript.append(
+                    MessageOut(role="assistant", content=message.content, tools=tools_used)
+                )
+                tools_used = []
     return transcript

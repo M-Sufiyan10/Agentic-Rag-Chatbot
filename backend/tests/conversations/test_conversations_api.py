@@ -1,7 +1,10 @@
 """Tests for the /api/conversations endpoints."""
 
+import uuid
+
 import httpx
 
+from app.chat.deps import in_progress_conversations
 from tests.conftest import register_user
 
 URL = "/api/conversations"
@@ -87,3 +90,21 @@ async def test_delete_conversation(client: httpx.AsyncClient) -> None:
     r = await client.delete(f"{URL}/{conv['id']}", headers=headers)
     assert r.status_code == 204
     assert (await client.get(URL, headers=headers)).json() == []
+
+
+async def test_delete_while_reply_in_progress_returns_409(client: httpx.AsyncClient) -> None:
+    alice = await register_user(client, email="alice@example.com")
+    bob = await register_user(client, email="bob@example.com")
+    conv = await _create(client, alice)
+    conversation_id = uuid.UUID(conv["id"])
+    in_progress_conversations.add(conversation_id)
+    try:
+        other = await client.delete(f"{URL}/{conv['id']}", headers=bob)
+        r = await client.delete(f"{URL}/{conv['id']}", headers=alice)
+    finally:
+        in_progress_conversations.discard(conversation_id)
+
+    assert other.status_code == 404
+    assert r.status_code == 409
+    assert r.json() == {"detail": "A reply is in progress. Try again when it finishes."}
+    assert len((await client.get(URL, headers=alice)).json()) == 1

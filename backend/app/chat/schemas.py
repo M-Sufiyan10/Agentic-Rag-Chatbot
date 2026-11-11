@@ -16,3 +16,5 @@ class MessageOut(BaseModel):
 
     role: Literal["user", "assistant"]
     content: str
+    tools: list[str] = []
+    """For an assistant message, the tools called since the previous user message, in order."""
