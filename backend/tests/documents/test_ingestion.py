@@ -1,4 +1,7 @@
+import asyncio
 import io
+import itertools
+import time
 import uuid
 from pathlib import Path
 
@@ -10,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.auth.models import User
 from app.config import Settings
+from app.documents import ingestion
 from app.documents.embeddings import build_embeddings
 from app.documents.ingestion import fail_interrupted_documents, ingest_document
 from app.documents.models import Document, DocumentChunk
@@ -215,3 +219,36 @@ async def test_document_over_chunk_limit_fails_without_embedding(
     assert doc.chunk_count == 0
     assert await _chunks(db_session, doc.id) == []
     assert spy.calls == 0
+
+
+async def test_extraction_does_not_block_the_event_loop(
+    db_session: AsyncSession,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    test_settings: Settings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def slow_extract_text(filename: str, data: bytes) -> list[str]:
+        time.sleep(0.3)  # stands in for parsing a large PDF
+        return [data.decode()]
+
+    monkeypatch.setattr(ingestion, "extract_text", slow_extract_text)
+    storage = LocalFileStorage(tmp_path)
+    doc = await _document(db_session, storage, "a.txt", b"some text")
+    loop = asyncio.get_running_loop()
+    ticks: list[float] = []
+    done = asyncio.Event()
+
+    async def ticker() -> None:
+        while not done.is_set():
+            ticks.append(loop.time())
+            await asyncio.sleep(0.01)
+
+    task = asyncio.create_task(ticker())
+    await _ingest(doc, sessionmaker, storage, DeterministicFakeEmbedding(size=768), test_settings)
+    done.set()
+    await task
+
+    assert (await _refreshed(db_session, doc)).status == "ready"
+    longest_stall = max(b - a for a, b in itertools.pairwise(ticks))
+    assert longest_stall < 0.2  # the loop kept running during the 0.3 s of "parsing"

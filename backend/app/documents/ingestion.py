@@ -1,5 +1,6 @@
 """Background ingestion: extract, chunk, embed and store a document."""
 
+import asyncio
 import logging
 import uuid
 
@@ -63,8 +64,12 @@ async def ingest_document(
 
         try:
             data = await storage.read(key)
-            pages = extract_text(filename, data)
-            chunks = chunk_pages(pages, settings.chunk_size, settings.chunk_overlap)
+            # Parsing and chunking are CPU-bound (seconds for a large file); run them in a
+            # worker thread so the event loop keeps serving other requests meanwhile.
+            pages = await asyncio.to_thread(extract_text, filename, data)
+            chunks = await asyncio.to_thread(
+                chunk_pages, pages, settings.chunk_size, settings.chunk_overlap
+            )
             if len(chunks) > settings.max_document_chunks:
                 # Embedding is the slow part (about a second per chunk on a CPU), so a
                 # huge file would tie up the embedding server for hours.
