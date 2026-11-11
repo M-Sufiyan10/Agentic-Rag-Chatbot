@@ -6,7 +6,7 @@ A multi-user LLM chatbot built the way a production AI app is built: a **LangGra
 
 The goal is more than "a chat box". Over the roadmap below the agent grows tools, document Q&A (RAG), MCP servers, tracing, and a measured evaluation, because the engineering around the LLM is the point.
 
-> **Status:** Milestones 1 (foundation), 2 (agent tools) and 3 (documents and RAG) are complete. See the [roadmap](#roadmap).
+> **Status:** Milestones 1 (foundation), 2 (agent tools), 3 (documents and RAG) and 4 (MCP) are complete. See the [roadmap](#roadmap).
 
 ## Screenshots
 
@@ -14,7 +14,7 @@ The goal is more than "a chat box". Over the roadmap below the agent grows tools
 
 _Screenshots and a demo GIF will be added in Milestone 7._
 
-## What works today (M1 to M3)
+## What works today (M1 to M4)
 
 - **Auth:** register and log in with email and password (argon2 hashes). Short-lived JWT access tokens, with a refresh token held in an httpOnly cookie.
 - **Conversations:** create, list, rename and delete. Every query is scoped to the signed-in user, and another user's conversation returns `404`.
@@ -23,6 +23,7 @@ _Screenshots and a demo GIF will be added in Milestone 7._
 - **React UI:** login/register, conversation sidebar, and a chat pane with live streaming and Markdown rendering.
 - **Agent tools (M2):** the agent loops between the model and tools until it can answer. It has a safe `calculator` (an AST evaluator, never `eval`), `current_datetime`, and `web_search` (keyless metasearch via ddgs; see the caveat under Agent settings). The UI shows a live chip per tool call ("Searching the web...") and keeps them on the saved message. A max-rounds guard stops a looping model, long histories are trimmed for the model, a failed or abandoned reply is rolled back so the thread stays valid, and Markdown images in replies are shown as links instead of being fetched.
 - **Documents and RAG (M3):** upload PDF, DOCX, TXT or MD files in a Documents panel. They are ingested in the background (`processing`, then `ready` or `failed` with a reason), chunked, embedded with `nomic-embed-text` and stored in pgvector. The agent's `search_documents` tool searches only the signed-in user's documents (the user id comes from the server, never from the model), and answers show expandable source citations (file, chunk and snippet) that also survive a reload. Another user's document returns `404`.
+- **MCP tools (M4):** the agent also loads tools from MCP servers listed in `backend/mcp_servers.json`: a custom `mcp-utils` server (`get_weather`, `convert_units`, `convert_time`; its own service with a Dockerfile, compose entry and CI job) and the third-party `fetch` server for reading web pages (it refuses private addresses, so the cloud metadata endpoint is out of reach). A server that is down at startup is skipped and shown as `unavailable` in `/api/health`; the app keeps working. See the [MCP section](#mcp).
 - **Quality gates:** pytest (the LLM is always faked in unit tests), ruff, mypy strict, Vitest, oxlint and `tsc`, all run in GitHub Actions.
 
 ## Roadmap
@@ -34,7 +35,7 @@ The full design is in the [spec](docs/superpowers/specs/2026-11-10-agentic-chatb
 | M1  | Foundation & thin slice | Postgres, auth, conversations, streamed chat with a LangGraph agent, React UI, CI (**done**)          |
 | M2  | Agent tools             | Tool loop; calculator, current time, web search; tool-status events and chips in the UI (**done**)    |
 | M3  | Documents & RAG         | Upload PDF/DOCX/TXT/MD, ingestion into pgvector, per-user document search, citations (**done**)       |
-| M4  | MCP                     | A custom FastMCP server plus a third-party one, loaded by the agent from config                       |
+| M4  | MCP                     | A custom FastMCP server plus a third-party one, loaded by the agent from config (**done**)            |
 | M5  | Observability           | Langfuse tracing tagged by user and conversation, thumbs feedback as scores                           |
 | M6  | Evaluation              | Eval dataset and runner, LLM judge, tool-selection / retrieval / faithfulness metrics, 4B vs 8B model |
 | M7  | Production polish       | Dockerfiles, one-command `docker compose up`, rate limits, architecture diagram, screenshots          |
@@ -47,6 +48,9 @@ React (Vite) --POST /api/conversations/{id}/messages--> FastAPI --> LangGraph ag
      |                                                      |             |   '--> tools: calculator,
      |                                                      |             |        current_datetime, web_search,
      |                                                      |             |        search_documents (pgvector)
+     |                                                      |             |   '--> MCP (from mcp_servers.json):
+     |                                                      |             |        mcp-utils :8100 (HTTP)
+     |                                                      |             |        fetch (stdio, uvx)
      '-- SSE: token, tool_start, tool_end, ..., done -------'             '--> Postgres checkpointer
                                                                               (chat history per thread)
 ```
@@ -55,10 +59,11 @@ React (Vite) --POST /api/conversations/{id}/messages--> FastAPI --> LangGraph ag
 - `backend/app/conversations/`: conversation CRUD (SQLAlchemy 2 async, Alembic migrations).
 - `backend/app/agent/`: the LangGraph graph (`graph.py`), the model factory (`llm.py`), the Postgres checkpointer (`checkpointer.py`), the prompts, and the tools (`tools/`).
 - `backend/app/documents/`: upload API, background ingestion (extract, chunk, embed), pgvector retrieval, and the `reindex` command.
+- `backend/app/agent/mcp.py` and `mcp-utils/`: the MCP client (config, per-server loading, guarded tools) and the custom MCP server.
 - `backend/app/chat/`: the send-message endpoint and the graph-to-SSE translation (`streaming.py`).
 - `frontend/src/`: the API client with transparent token refresh (`api/client.ts`), an SSE parser (`api/sse.ts`), and the chat UI (`chat/`).
 
-New to the stack? [`docs/learning/01-foundation.md`](docs/learning/01-foundation.md) walks through how these pieces fit together, [`docs/learning/02-agent-tools.md`](docs/learning/02-agent-tools.md) explains the tool loop, and [`docs/learning/03-documents-rag.md`](docs/learning/03-documents-rag.md) covers embeddings, ingestion, pgvector and per-user isolation.
+New to the stack? [`docs/learning/01-foundation.md`](docs/learning/01-foundation.md) walks through how these pieces fit together, [`docs/learning/02-agent-tools.md`](docs/learning/02-agent-tools.md) explains the tool loop, [`docs/learning/03-documents-rag.md`](docs/learning/03-documents-rag.md) covers embeddings, ingestion, pgvector and per-user isolation, and [`docs/learning/04-mcp.md`](docs/learning/04-mcp.md) covers MCP servers, failure isolation and the live results.
 
 ## Prerequisites
 
@@ -177,7 +182,10 @@ The config file is `backend/mcp_servers.json` (`MCP_CONFIG_PATH`, resolved relat
 
 ```json
 {
-  "utils": { "transport": "streamable_http", "url": "http://localhost:8100/mcp" },
+  "utils": {
+    "transport": "streamable_http",
+    "url": "http://localhost:8100/mcp"
+  },
   "fetch": {
     "transport": "stdio",
     "command": "uvx",
@@ -186,13 +194,13 @@ The config file is `backend/mcp_servers.json` (`MCP_CONFIG_PATH`, resolved relat
 }
 ```
 
-| Variable                      | Default            | Meaning                                                            |
-| ----------------------------- | ------------------ | ------------------------------------------------------------------ |
-| `MCP_CONFIG_PATH`             | `mcp_servers.json` | Server config file                                                 |
-| `MCP_TOOL_TIMEOUT_SECONDS`    | `30`               | Deadline for one MCP tool call                                     |
-| `MCP_STARTUP_TIMEOUT_SECONDS` | `20`               | Deadline for loading one server's tools at startup                 |
-| `MCP_UTILS_HOST`              | `127.0.0.1`        | `mcp-utils` bind address (the Docker image sets `0.0.0.0`)         |
-| `MCP_UTILS_PORT`              | `8100`             | `mcp-utils` port                                                   |
+| Variable                      | Default            | Meaning                                                    |
+| ----------------------------- | ------------------ | ---------------------------------------------------------- |
+| `MCP_CONFIG_PATH`             | `mcp_servers.json` | Server config file                                         |
+| `MCP_TOOL_TIMEOUT_SECONDS`    | `30`               | Deadline for one MCP tool call                             |
+| `MCP_STARTUP_TIMEOUT_SECONDS` | `20`               | Deadline for loading one server's tools at startup         |
+| `MCP_UTILS_HOST`              | `127.0.0.1`        | `mcp-utils` bind address (the Docker image sets `0.0.0.0`) |
+| `MCP_UTILS_PORT`              | `8100`             | `mcp-utils` port                                           |
 
 A tool whose name matches a built-in tool or an already-loaded MCP tool is skipped with a warning; built-ins win. `GET /api/health` reports each server: `{"status": "ok", "mcp": {"utils": "ok", "fetch": "unavailable"}}`.
 
