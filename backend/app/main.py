@@ -1,17 +1,19 @@
 """FastAPI application factory."""
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from typing import Any
 
 from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from langchain_core.language_models import BaseChatModel
+from langchain_core.tools import BaseTool
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from app.agent.checkpointer import open_checkpointer
 from app.agent.graph import build_graph
 from app.agent.llm import build_chat_model
+from app.agent.tools import build_tools
 from app.auth.router import router as auth_router
 from app.chat.router import router as chat_router
 from app.config import Settings, get_settings
@@ -24,11 +26,13 @@ def create_app(
     *,
     chat_model: BaseChatModel | None = None,
     checkpointer: BaseCheckpointSaver[Any] | None = None,
+    tools: Sequence[BaseTool] | None = None,
 ) -> FastAPI:
     """Build the app.
 
-    ``chat_model`` and ``checkpointer`` are a test seam: when given, they are
-    used instead of the configured LLM and the Postgres checkpointer.
+    ``chat_model``, ``checkpointer`` and ``tools`` are a test seam: when given, they
+    are used instead of the configured LLM, the Postgres checkpointer and the
+    built-in tools (``tools=[]`` disables tools).
     """
     settings = settings or get_settings()
 
@@ -51,7 +55,13 @@ def create_app(
             else:
                 saver = await stack.enter_async_context(open_checkpointer(settings.database_url))
             model = chat_model if chat_model is not None else build_chat_model(settings)
-            app.state.graph = build_graph(model, saver)
+            app.state.graph = build_graph(
+                model,
+                saver,
+                build_tools(settings) if tools is None else tools,
+                max_tool_rounds=settings.agent_max_tool_rounds,
+                max_history_tokens=settings.llm_max_history_tokens,
+            )
             yield
 
     app = FastAPI(title="Chatbot API", lifespan=lifespan)

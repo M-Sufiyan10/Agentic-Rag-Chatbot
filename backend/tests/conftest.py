@@ -15,6 +15,7 @@ from fastapi import FastAPI
 from langchain_core.language_models import BaseChatModel
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage
+from langchain_core.tools import BaseTool
 from langgraph.checkpoint.memory import InMemorySaver
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -90,11 +91,22 @@ def checkpointer() -> InMemorySaver:
 
 
 @pytest.fixture
+def tools() -> list[BaseTool]:
+    """The agent's tools; none by default. Override in a test module to add some."""
+    return []
+
+
+@pytest.fixture
 async def app(
-    test_settings: Settings, chat_model: BaseChatModel, checkpointer: InMemorySaver
+    test_settings: Settings,
+    chat_model: BaseChatModel,
+    checkpointer: InMemorySaver,
+    tools: list[BaseTool],
 ) -> AsyncIterator[FastAPI]:
     """The app with its lifespan running, wired to the fake model and checkpointer."""
-    application = create_app(test_settings, chat_model=chat_model, checkpointer=checkpointer)
+    application = create_app(
+        test_settings, chat_model=chat_model, checkpointer=checkpointer, tools=tools
+    )
     async with LifespanManager(application):
         yield application
 

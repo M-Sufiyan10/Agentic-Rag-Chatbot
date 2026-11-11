@@ -1,4 +1,4 @@
-"""The LangGraph agent: a one-node graph that calls the chat model.
+"""The LangGraph agent: a model node and a tool node joined in a loop.
 
 LangGraph concepts, in the order they appear below:
 
@@ -7,42 +7,110 @@ LangGraph concepts, in the order they appear below:
   *appends* whatever a node returns under `messages`, rather than replacing
   the list, so conversation history accumulates.
 * **Nodes** are plain (async) functions that take the current state and return
-  a partial state update. Our only node, `agent`, sends the conversation to the
-  model and returns the reply as `{"messages": [reply]}`.
-* **Edges** define control flow. `START -> agent -> END` means: run `agent`
-  once, then stop. Later milestones add tools by inserting more nodes and
-  conditional edges (agent -> tools -> agent loop).
+  a partial state update. `agent` sends the conversation to the model and
+  returns the reply as `{"messages": [reply]}`. `tools` is LangGraph's prebuilt
+  `ToolNode`: it runs every tool call on the model's last message and appends
+  one `ToolMessage` per call. Tool errors (unknown tool, bad arguments) become
+  error `ToolMessage`s so the model can see them and recover.
+* **Edges** define control flow. `tools_condition` routes `agent -> tools` when
+  the reply contains tool calls and `agent -> END` otherwise; `tools -> agent`
+  closes the loop. Without any tools the graph is just `START -> agent -> END`.
 * **Checkpointer** saves the state after each step, keyed by the `thread_id`
   in the run config. Invoking the graph again with the same `thread_id` loads
   the saved history first, so the caller only sends the *new* message.
+
+Two guards live inside the `agent` node:
+
+* **Max tool rounds.** A "round" is one model reply that requests tools. Rounds
+  are counted per turn (after the latest human message). Once the limit is hit
+  the model is called *without* tools and with an extra instruction to answer
+  now, so a looping model always ends with text.
+* **History trimming.** Only the model's view is trimmed to a token budget
+  (starting on a human message, so a tool call is never separated from its
+  result); the full history stays in state.
 
 The system prompt is prepended inside the node on every call and is never
 written to state, so it is not duplicated in the checkpoint and can be changed
 without touching stored conversations.
 """
 
+from collections.abc import Sequence
 from typing import Any
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import BaseMessage, SystemMessage
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    trim_messages,
+)
+from langchain_core.messages.utils import count_tokens_approximately
+from langchain_core.tools import BaseTool
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.graph.state import CompiledStateGraph
+from langgraph.prebuilt import ToolNode, tools_condition
 
-from app.agent.prompts import SYSTEM_PROMPT
+from app.agent.prompts import FINAL_ROUND_INSTRUCTION, SYSTEM_PROMPT
+
+
+def _tool_rounds_this_turn(messages: Sequence[BaseMessage]) -> int:
+    """Count AI messages that requested tools since the latest human message."""
+    rounds = 0
+    for message in reversed(messages):
+        if isinstance(message, HumanMessage):
+            break
+        if isinstance(message, AIMessage) and message.tool_calls:
+            rounds += 1
+    return rounds
+
+
+def _trim_history(messages: Sequence[BaseMessage], max_tokens: int) -> list[BaseMessage]:
+    trimmed = trim_messages(
+        list(messages),
+        strategy="last",
+        token_counter=count_tokens_approximately,
+        max_tokens=max_tokens,
+        start_on="human",
+        include_system=False,
+        allow_partial=False,
+    )
+    if trimmed:
+        return trimmed
+    # A single message over budget: keep the latest human message rather than nothing.
+    last_human = next((m for m in reversed(messages) if isinstance(m, HumanMessage)), None)
+    return [last_human] if last_human is not None else list(messages)
 
 
 def build_graph(
-    model: BaseChatModel, checkpointer: BaseCheckpointSaver[Any]
+    model: BaseChatModel,
+    checkpointer: BaseCheckpointSaver[Any],
+    tools: Sequence[BaseTool] = (),
+    *,
+    max_tool_rounds: int = 5,
+    max_history_tokens: int = 6000,
 ) -> CompiledStateGraph[Any, Any, Any, Any]:
     """Compile the agent graph around `model`, persisting state via `checkpointer`."""
+    # Bound once at build time; with no tools the plain model is used (bind_tools never called).
+    tool_model: Any = model.bind_tools(list(tools)) if tools else model
 
     async def agent(state: MessagesState) -> dict[str, list[BaseMessage]]:
-        response = await model.ainvoke([SystemMessage(SYSTEM_PROMPT), *state["messages"]])
+        history = _trim_history(state["messages"], max_history_tokens)
+        prompt: list[BaseMessage] = [SystemMessage(SYSTEM_PROMPT), *history]
+        if tools and _tool_rounds_this_turn(state["messages"]) >= max_tool_rounds:
+            response = await model.ainvoke([*prompt, SystemMessage(FINAL_ROUND_INSTRUCTION)])
+        else:
+            response = await tool_model.ainvoke(prompt)
         return {"messages": [response]}
 
     builder = StateGraph(MessagesState)
     builder.add_node("agent", agent)
     builder.add_edge(START, "agent")
-    builder.add_edge("agent", END)
+    if tools:
+        builder.add_node("tools", ToolNode(tools))
+        builder.add_conditional_edges("agent", tools_condition)
+        builder.add_edge("tools", "agent")
+    else:
+        builder.add_edge("agent", END)
     return builder.compile(checkpointer=checkpointer)
