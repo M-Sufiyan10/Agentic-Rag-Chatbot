@@ -18,7 +18,7 @@ from app.agent.graph import build_graph
 from app.chat import deps as chat_deps
 from app.chat import router as chat_router
 from tests.conftest import FAKE_REPLY, read_sse, register_user
-from tests.fakes import ScriptedChatModel, echo, tool_call_reply
+from tests.fakes import ScriptedChatModel, echo, tool_call_reply, whoami
 
 CONVERSATIONS = "/api/conversations"
 
@@ -168,7 +168,7 @@ async def test_disconnect_rolls_back_before_releasing_id() -> None:
     conversation_id = uuid.uuid4()
     chat_deps.in_progress_conversations.add(conversation_id)
 
-    agen = chat_router.stream_and_release(graph, conversation_id, "x")
+    agen = chat_router.stream_and_release(graph, conversation_id, "x", "user-1")
     async for event in agen:
         if event.event == "tool_end":
             break
@@ -226,3 +226,19 @@ async def test_transcript_skips_preamble_of_tool_call_message(client: httpx.Asyn
         {"role": "user", "content": "say hi", "tools": []},
         {"role": "assistant", "content": "answer", "tools": ["echo"]},
     ]
+
+
+@pytest.mark.parametrize(
+    "chat_model",
+    [ScriptedChatModel(replies=[tool_call_reply("whoami", {}, "c1"), AIMessage("ok")])],
+)
+@pytest.mark.parametrize("tools", [[whoami]])
+async def test_authenticated_user_id_reaches_tools(client: httpx.AsyncClient) -> None:
+    headers = await register_user(client)
+    me = await client.get("/api/auth/me", headers=headers)
+    cid = await _new_conversation(client, headers)
+
+    r = await client.post(_messages_url(cid), json={"content": "who am i"}, headers=headers)
+
+    (tool_end,) = [data for name, data in read_sse(r) if name == "tool_end"]
+    assert tool_end["output"] == me.json()["id"]

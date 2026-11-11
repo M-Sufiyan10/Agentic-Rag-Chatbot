@@ -40,7 +40,7 @@ async def _record_new_message(session: AsyncSession, conversation: Conversation,
 
 
 async def stream_and_release(
-    graph: Graph, conversation_id: UUID, text: str
+    graph: Graph, conversation_id: UUID, text: str, user_id: str
 ) -> AsyncIterator[ServerSentEvent]:
     """Stream the agent's events, then release ``conversation_id``.
 
@@ -52,7 +52,9 @@ async def stream_and_release(
     the rollback ran.
     """
     try:
-        async with aclosing(stream_agent_events(graph, str(conversation_id), text)) as events:
+        async with aclosing(
+            stream_agent_events(graph, str(conversation_id), text, user_id)
+        ) as events:
             async for event in events:
                 yield event
     finally:
@@ -90,7 +92,8 @@ async def send_message(
     # task once the response finishes. ``discard`` is idempotent.
     release = BackgroundTask(in_progress_conversations.discard, conversation_id)
     return EventSourceResponse(
-        stream_and_release(graph, conversation_id, body.content), background=release
+        stream_and_release(graph, conversation_id, body.content, str(user.id)),
+        background=release,
     )
 
 

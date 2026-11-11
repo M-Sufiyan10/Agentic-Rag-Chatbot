@@ -3,6 +3,8 @@ from datetime import datetime
 from typing import Any
 
 import pytest
+from langchain_core.embeddings import Embeddings
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.tools import build_tools, datetime_tool, web_search
 from app.agent.tools.calculator import calculator, evaluate
@@ -152,9 +154,11 @@ async def test_web_search_deadline_returns_error(monkeypatch: pytest.MonkeyPatch
     assert out.startswith("Error: web search timed out")
 
 
-def test_build_tools_names(test_settings: Settings) -> None:
-    names = [t.name for t in build_tools(test_settings)]
-    assert names == ["calculator", "current_datetime", "web_search"]
+def test_build_tools_names(test_settings: Settings, embeddings: Embeddings) -> None:
+    sessionmaker = async_sessionmaker[AsyncSession]()
+    tools = build_tools(test_settings, sessionmaker=sessionmaker, embeddings=embeddings)
+    names = [t.name for t in tools]
+    assert names == ["calculator", "current_datetime", "web_search", "search_documents"]
 
 
 @pytest.mark.parametrize("expr", ["-" * 5000 + "1", "1+" * 5000 + "1"])

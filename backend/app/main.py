@@ -67,7 +67,13 @@ def create_app(
             app.state.graph = build_graph(
                 model,
                 saver,
-                build_tools(settings) if tools is None else tools,
+                build_tools(
+                    settings,
+                    sessionmaker=app.state.sessionmaker,
+                    embeddings=app.state.embeddings,
+                )
+                if tools is None
+                else tools,
                 max_tool_rounds=settings.agent_max_tool_rounds,
                 max_history_tokens=settings.llm_max_history_tokens,
             )

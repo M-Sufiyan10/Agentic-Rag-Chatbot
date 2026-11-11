@@ -14,7 +14,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from app.agent.graph import build_graph
 from app.chat.streaming import MODEL_ERROR_MESSAGE, stream_agent_events
-from tests.fakes import ScriptedChatModel, echo, tool_call_reply
+from tests.fakes import ScriptedChatModel, echo, tool_call_reply, whoami
 
 CONFIG: Any = {"configurable": {"thread_id": "thread-1"}}
 
@@ -68,7 +68,7 @@ class NonStreamingChatModel(BaseChatModel):
 async def _collect(graph: Any, text: str) -> list[tuple[str, dict[str, Any]]]:
     return [
         (event.event or "", json.loads(event.data))
-        async for event in stream_agent_events(graph, "thread-1", text)
+        async for event in stream_agent_events(graph, "thread-1", text, "user-1")
     ]
 
 
@@ -217,7 +217,7 @@ async def test_failure_after_tool_call_rolls_back_whole_turn() -> None:
 async def test_client_disconnect_mid_turn_rolls_back() -> None:
     graph = _tool_graph([tool_call_reply("echo", {"text": "hi"}, "c1"), AIMessage("never")])
 
-    agen = stream_agent_events(graph, "thread-1", "x")
+    agen = stream_agent_events(graph, "thread-1", "x", "user-1")
     async for event in agen:
         if event.event == "tool_end":
             break
@@ -232,7 +232,7 @@ async def test_cancellation_mid_turn_rolls_back() -> None:
     graph = _tool_graph([tool_call_reply("echo", {"text": "hi"}, "c1"), AIMessage("never")])
 
     with anyio.CancelScope() as scope:
-        async for event in stream_agent_events(graph, "thread-1", "x"):
+        async for event in stream_agent_events(graph, "thread-1", "x", "user-1"):
             if event.event == "tool_end":
                 scope.cancel()
 
@@ -243,7 +243,7 @@ async def test_cancellation_mid_turn_rolls_back() -> None:
 async def test_disconnect_after_answer_keeps_turn() -> None:
     graph = _tool_graph([AIMessage("answer")])
 
-    agen = stream_agent_events(graph, "thread-1", "x")
+    agen = stream_agent_events(graph, "thread-1", "x", "user-1")
     async for event in agen:
         if event.event == "done":
             break
@@ -251,3 +251,13 @@ async def test_disconnect_after_answer_keeps_turn() -> None:
 
     messages = await _state_messages(graph)
     assert [(type(m), m.content) for m in messages] == [(HumanMessage, "x"), (AIMessage, "answer")]
+
+
+async def test_user_id_reaches_configurable() -> None:
+    model = ScriptedChatModel(replies=[tool_call_reply("whoami", {}, "c1"), AIMessage("ok")])
+    graph = build_graph(model, InMemorySaver(), tools=[whoami])
+
+    events = await _collect(graph, "who am i")
+
+    (tool_end,) = [d for n, d in events if n == "tool_end"]
+    assert tool_end["output"] == "user-1"

@@ -9,7 +9,7 @@ from langchain_core.callbacks import AsyncCallbackManagerForLLMRun, CallbackMana
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
-from langchain_core.runnables import Runnable
+from langchain_core.runnables import Runnable, RunnableConfig
 from langchain_core.tools import BaseTool, tool
 from pydantic import SkipValidation
 
@@ -18,6 +18,12 @@ from pydantic import SkipValidation
 def echo(text: str) -> str:
     """Return the text unchanged."""
     return text
+
+
+@tool
+def whoami(config: RunnableConfig) -> str:
+    """Return the user id the server put in the run config."""
+    return str(config["configurable"]["user_id"])
 
 
 def tool_call_reply(name: str, args: dict[str, Any], call_id: str, content: str = "") -> AIMessage:

@@ -177,9 +177,13 @@ async def roll_back_incomplete_turn(
 
 
 async def stream_agent_events(
-    graph: CompiledStateGraph[Any, Any, Any, Any], thread_id: str, user_text: str
+    graph: CompiledStateGraph[Any, Any, Any, Any], thread_id: str, user_text: str, user_id: str
 ) -> AsyncGenerator[ServerSentEvent]:
     """Run the agent on ``user_text`` in thread ``thread_id`` and yield SSE events.
+
+    ``user_id`` is the authenticated user's id. It goes into the run config
+    (``configurable.user_id``), where per-user tools such as
+    ``search_documents`` read it; it is never taken from the model.
 
     Only the *new* user message is sent: the checkpointer loads the earlier
     history of ``thread_id`` before the graph runs and saves the result after.
@@ -189,7 +193,7 @@ async def stream_agent_events(
     failure, one ``error`` event (``{"message": ...}``) instead of ``done``.
     See the module docstring for the exact mapping and the rollback rules.
     """
-    config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
+    config: RunnableConfig = {"configurable": {"thread_id": thread_id, "user_id": user_id}}
     reply_parts: list[str] = []
     human_message = HumanMessage(user_text, id=str(uuid4()))
     # With a list of modes, astream yields (mode, payload) pairs; its declared type can't say so.
