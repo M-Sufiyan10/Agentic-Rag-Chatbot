@@ -24,6 +24,11 @@ The graph is run with ``stream_mode=["messages", "updates"]``, which yields
   ``{"id": tool_call_id, "name": name, "output": text[:TOOL_OUTPUT_LIMIT]}``,
   where the text is ``ToolMessage.text``.
 
+``citations``: when a ``search_documents`` ``ToolMessage`` carries an
+``artifact`` list, its items are collected; if any were, one
+``{"items": [...]}`` event is sent just before ``done``, de-duplicated by
+``(document_id, chunk_index)`` in first-seen order. Nothing is sent on failure.
+
 ``done.content`` is the text of the final AI answer only. Text streamed in an
 earlier round, before a tool call (a "Let me check..." preamble), is not
 included: the accumulated parts are reset on every ``tool_start``.
@@ -102,11 +107,33 @@ def _events_for_message_chunk(
     return [sse_event("token", {"text": text})]
 
 
-def _events_for_update(update: dict[str, Any], reply_parts: list[str]) -> list[ServerSentEvent]:
+def citation_items(message: ToolMessage) -> list[dict[str, Any]]:
+    """The citation items a ``search_documents`` result carries, else ``[]``."""
+    if message.name == "search_documents" and isinstance(message.artifact, list):
+        return [item for item in message.artifact if isinstance(item, dict)]
+    return []
+
+
+def dedupe_citations(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop repeats of the same ``(document_id, chunk_index)``, keeping first-seen order."""
+    seen: set[tuple[Any, Any]] = set()
+    unique: list[dict[str, Any]] = []
+    for item in items:
+        key = (item.get("document_id"), item.get("chunk_index"))
+        if key not in seen:
+            seen.add(key)
+            unique.append(item)
+    return unique
+
+
+def _events_for_update(
+    update: dict[str, Any], reply_parts: list[str], citations: list[dict[str, Any]]
+) -> list[ServerSentEvent]:
     """Map one ``"updates"``-mode payload to ``tool_start``/``tool_end`` events.
 
     A ``tool_start`` clears ``reply_parts``: text before a tool call was a
-    preamble, not part of the final answer.
+    preamble, not part of the final answer. Citation items from
+    ``search_documents`` results are appended to ``citations``.
     """
     events: list[ServerSentEvent] = []
     for node, node_update in update.items():
@@ -123,6 +150,7 @@ def _events_for_update(update: dict[str, Any], reply_parts: list[str]) -> list[S
                         )
                     )
             elif node == "tools" and isinstance(message, ToolMessage):
+                citations.extend(citation_items(message))
                 events.append(
                     sse_event(
                         "tool_end",
@@ -195,6 +223,7 @@ async def stream_agent_events(
     """
     config: RunnableConfig = {"configurable": {"thread_id": thread_id, "user_id": user_id}}
     reply_parts: list[str] = []
+    citations: list[dict[str, Any]] = []
     human_message = HumanMessage(user_text, id=str(uuid4()))
     # With a list of modes, astream yields (mode, payload) pairs; its declared type can't say so.
     stream = cast(
@@ -214,7 +243,7 @@ async def stream_agent_events(
                 chunk, metadata = payload
                 events = _events_for_message_chunk(chunk, metadata, reply_parts)
             else:
-                events = _events_for_update(payload, reply_parts)
+                events = _events_for_update(payload, reply_parts, citations)
             for event in events:
                 yield event
     except Exception:
@@ -225,4 +254,6 @@ async def stream_agent_events(
     except (asyncio.CancelledError, GeneratorExit):
         await clean_up()
         raise
+    if citations:
+        yield sse_event("citations", {"items": dedupe_citations(citations)})
     yield sse_event("done", {"content": "".join(reply_parts)})

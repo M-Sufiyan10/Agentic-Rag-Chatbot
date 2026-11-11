@@ -3,11 +3,11 @@
 from collections.abc import AsyncIterator
 from contextlib import aclosing
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette import EventSourceResponse, ServerSentEvent
@@ -16,8 +16,8 @@ from starlette.background import BackgroundTask
 from app.auth.deps import get_current_user
 from app.auth.models import User
 from app.chat.deps import Graph, GraphDep, in_progress_conversations
-from app.chat.schemas import MessageIn, MessageOut
-from app.chat.streaming import stream_agent_events
+from app.chat.schemas import CitationOut, MessageIn, MessageOut
+from app.chat.streaming import citation_items, dedupe_citations, stream_agent_events
 from app.conversations.models import Conversation
 from app.conversations.service import get_owned_conversation
 from app.db import get_session
@@ -104,19 +104,23 @@ async def get_messages(
     """Return the conversation transcript, read from the checkpointed graph state.
 
     Only user and assistant messages with text are returned. Each assistant
-    message lists the tools called since the previous user message. A new
-    thread returns ``[]``.
+    message lists the tools called and the document chunks cited since the
+    previous user message. A new thread returns ``[]``.
     """
     await get_owned_conversation(session, user.id, conversation_id)
     config: RunnableConfig = {"configurable": {"thread_id": str(conversation_id)}}
     snapshot = await graph.aget_state(config)
     transcript: list[MessageOut] = []
     tools_used: list[str] = []
+    found: list[dict[str, Any]] = []
     for message in snapshot.values.get("messages", []):
         if isinstance(message, HumanMessage):
             tools_used = []
+            found = []
             if isinstance(message.content, str) and message.content:
                 transcript.append(MessageOut(role="user", content=message.content))
+        elif isinstance(message, ToolMessage):
+            found.extend(citation_items(message))
         elif isinstance(message, AIMessage):
             tools_used.extend(call["name"] for call in message.tool_calls)
             # A preamble that came with tool calls is not an answer; the chips attach to
@@ -125,7 +129,13 @@ async def get_messages(
                 continue
             if isinstance(message.content, str) and message.content:
                 transcript.append(
-                    MessageOut(role="assistant", content=message.content, tools=tools_used)
+                    MessageOut(
+                        role="assistant",
+                        content=message.content,
+                        tools=tools_used,
+                        citations=[CitationOut(**c) for c in dedupe_citations(found)],
+                    )
                 )
                 tools_used = []
+                found = []
     return transcript

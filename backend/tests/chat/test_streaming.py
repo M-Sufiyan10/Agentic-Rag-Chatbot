@@ -14,7 +14,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from app.agent.graph import build_graph
 from app.chat.streaming import MODEL_ERROR_MESSAGE, stream_agent_events
-from tests.fakes import ScriptedChatModel, echo, tool_call_reply, whoami
+from tests.fakes import ScriptedChatModel, echo, fake_search_documents, tool_call_reply, whoami
 
 CONFIG: Any = {"configurable": {"thread_id": "thread-1"}}
 
@@ -261,3 +261,36 @@ async def test_user_id_reaches_configurable() -> None:
 
     (tool_end,) = [d for n, d in events if n == "tool_end"]
     assert tool_end["output"] == "user-1"
+
+
+async def test_citations_event_is_deduplicated_and_sent_right_before_done() -> None:
+    model = ScriptedChatModel(
+        replies=[
+            tool_call_reply("search_documents", {"query": "a"}, "c1"),
+            tool_call_reply("search_documents", {"query": "b"}, "c2"),
+            AIMessage("From your notes"),
+        ]
+    )
+    graph = build_graph(model, InMemorySaver(), tools=[fake_search_documents])
+
+    events = await _collect(graph, "what do my notes say")
+
+    names = [n for n, _ in events]
+    assert names.count("citations") == 1
+    assert names[-2:] == ["citations", "done"]
+    (items,) = [d["items"] for n, d in events if n == "citations"]
+    assert [i["chunk_index"] for i in items] == [0, 1]
+    assert items[0] == {
+        "document_id": "doc-1",
+        "filename": "notes.txt",
+        "chunk_index": 0,
+        "snippet": "chunk 0",
+    }
+
+
+async def test_no_citations_event_without_search_documents() -> None:
+    graph = _tool_graph([tool_call_reply("echo", {"text": "hi"}, "c1"), AIMessage("ok")])
+
+    events = await _collect(graph, "say hi")
+
+    assert "citations" not in [n for n, _ in events]

@@ -18,7 +18,7 @@ from app.agent.graph import build_graph
 from app.chat import deps as chat_deps
 from app.chat import router as chat_router
 from tests.conftest import FAKE_REPLY, read_sse, register_user
-from tests.fakes import ScriptedChatModel, echo, tool_call_reply, whoami
+from tests.fakes import ScriptedChatModel, echo, fake_search_documents, tool_call_reply, whoami
 
 CONVERSATIONS = "/api/conversations"
 
@@ -60,8 +60,8 @@ async def test_history_after_one_exchange(client: httpx.AsyncClient) -> None:
 
     assert r.status_code == 200
     assert r.json() == [
-        {"role": "user", "content": "hi there", "tools": []},
-        {"role": "assistant", "content": FAKE_REPLY, "tools": []},
+        {"role": "user", "content": "hi there", "tools": [], "citations": []},
+        {"role": "assistant", "content": FAKE_REPLY, "tools": [], "citations": []},
     ]
 
 
@@ -154,8 +154,8 @@ async def test_retry_after_model_failure_leaves_clean_history(client: httpx.Asyn
 
     history = await client.get(_messages_url(cid), headers=headers)
     assert history.json() == [
-        {"role": "user", "content": "hi", "tools": []},
-        {"role": "assistant", "content": "ok", "tools": []},
+        {"role": "user", "content": "hi", "tools": [], "citations": []},
+        {"role": "assistant", "content": "ok", "tools": [], "citations": []},
     ]
 
 
@@ -200,8 +200,8 @@ async def test_tool_events_streamed_and_listed_in_transcript(client: httpx.Async
     assert names[-1] == "done"
     history = await client.get(_messages_url(cid), headers=headers)
     assert history.json() == [
-        {"role": "user", "content": "say hi", "tools": []},
-        {"role": "assistant", "content": "It said hi", "tools": ["echo"]},
+        {"role": "user", "content": "say hi", "tools": [], "citations": []},
+        {"role": "assistant", "content": "It said hi", "tools": ["echo"], "citations": []},
     ]
 
 
@@ -223,8 +223,8 @@ async def test_transcript_skips_preamble_of_tool_call_message(client: httpx.Asyn
     await client.post(_messages_url(cid), json={"content": "say hi"}, headers=headers)
     history = await client.get(_messages_url(cid), headers=headers)
     assert history.json() == [
-        {"role": "user", "content": "say hi", "tools": []},
-        {"role": "assistant", "content": "answer", "tools": ["echo"]},
+        {"role": "user", "content": "say hi", "tools": [], "citations": []},
+        {"role": "assistant", "content": "answer", "tools": ["echo"], "citations": []},
     ]
 
 
@@ -242,3 +242,32 @@ async def test_authenticated_user_id_reaches_tools(client: httpx.AsyncClient) ->
 
     (tool_end,) = [data for name, data in read_sse(r) if name == "tool_end"]
     assert tool_end["output"] == me.json()["id"]
+
+
+@pytest.mark.parametrize(
+    "chat_model",
+    [
+        ScriptedChatModel(
+            replies=[
+                tool_call_reply("search_documents", {"query": "a"}, "c1"),
+                tool_call_reply("search_documents", {"query": "b"}, "c2"),
+                AIMessage("From your notes"),
+            ]
+        )
+    ],
+)
+@pytest.mark.parametrize("tools", [[fake_search_documents]])
+async def test_citations_streamed_and_listed_in_transcript(client: httpx.AsyncClient) -> None:
+    headers = await register_user(client)
+    cid = await _new_conversation(client, headers)
+
+    r = await client.post(_messages_url(cid), json={"content": "notes?"}, headers=headers)
+
+    events = read_sse(r)
+    assert [n for n, _ in events][-2:] == ["citations", "done"]
+    history = (await client.get(_messages_url(cid), headers=headers)).json()
+    user, assistant = history
+    assert user["citations"] == []
+    assert [c["chunk_index"] for c in assistant["citations"]] == [0, 1]
+    assert assistant["citations"][0]["filename"] == "notes.txt"
+    assert assistant["tools"] == ["search_documents", "search_documents"]

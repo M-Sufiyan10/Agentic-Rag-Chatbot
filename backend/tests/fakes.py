@@ -26,6 +26,22 @@ def whoami(config: RunnableConfig) -> str:
     return str(config["configurable"]["user_id"])
 
 
+def _citation(chunk_index: int) -> dict[str, Any]:
+    return {
+        "document_id": "doc-1",
+        "filename": "notes.txt",
+        "chunk_index": chunk_index,
+        "snippet": f"chunk {chunk_index}",
+    }
+
+
+@tool(name_or_callable="search_documents", response_format="content_and_artifact")
+def fake_search_documents(query: str) -> tuple[str, list[dict[str, Any]]]:
+    """Fixed results: query "a" finds chunks 0 and 1, anything else finds chunk 1 only."""
+    items = [_citation(0), _citation(1)] if query == "a" else [_citation(1)]
+    return f"found {len(items)}", items
+
+
 def tool_call_reply(name: str, args: dict[str, Any], call_id: str, content: str = "") -> AIMessage:
     """An AI reply that asks for one tool call."""
     return AIMessage(content, tool_calls=[{"name": name, "args": args, "id": call_id}])
