@@ -1,6 +1,7 @@
 """Chat endpoints: send a message (streamed reply over SSE) and read the history."""
 
 from collections.abc import AsyncIterator
+from contextlib import aclosing
 from datetime import UTC, datetime
 from typing import Annotated, Any
 from uuid import UUID
@@ -53,6 +54,26 @@ async def _record_new_message(session: AsyncSession, conversation: Conversation,
     await session.commit()
 
 
+async def stream_and_release(
+    graph: Graph, conversation_id: UUID, text: str
+) -> AsyncIterator[ServerSentEvent]:
+    """Stream the agent's events, then release ``conversation_id``.
+
+    sse-starlette closes this generator (running ``finally``) when the stream
+    ends or the client disconnects. ``aclosing`` closes the inner generator
+    first, so its rollback of an incomplete turn has finished before the id is
+    released; otherwise the inner generator would only be finalized later by
+    the garbage collector, and a new message could start on the thread before
+    the rollback ran.
+    """
+    try:
+        async with aclosing(stream_agent_events(graph, str(conversation_id), text)) as events:
+            async for event in events:
+                yield event
+    finally:
+        in_progress_conversations.discard(conversation_id)
+
+
 @router.post("/{conversation_id}/messages", response_class=EventSourceResponse)
 async def send_message(
     conversation_id: UUID,
@@ -79,20 +100,13 @@ async def send_message(
         in_progress_conversations.discard(conversation_id)
         raise
 
-    async def events() -> AsyncIterator[ServerSentEvent]:
-        # sse-starlette closes this generator (running ``finally``) when the
-        # stream ends or the client disconnects, so the id is released.
-        try:
-            async for event in stream_agent_events(graph, str(conversation_id), body.content):
-                yield event
-        finally:
-            in_progress_conversations.discard(conversation_id)
-
     # Belt and braces: if the response is cancelled before the generator ever
     # starts, its ``finally`` never runs, so also release the id in a background
     # task once the response finishes. ``discard`` is idempotent.
     release = BackgroundTask(in_progress_conversations.discard, conversation_id)
-    return EventSourceResponse(events(), background=release)
+    return EventSourceResponse(
+        stream_and_release(graph, conversation_id, body.content), background=release
+    )
 
 
 @router.get("/{conversation_id}/messages", response_model=list[MessageOut])

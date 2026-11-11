@@ -60,7 +60,7 @@ so the graph stays at the end of the run instead of re-running it.
 import asyncio
 import json
 import logging
-from collections.abc import AsyncGenerator, AsyncIterator
+from collections.abc import AsyncGenerator
 from typing import Any, cast
 from uuid import uuid4
 
@@ -178,7 +178,7 @@ async def roll_back_incomplete_turn(
 
 async def stream_agent_events(
     graph: CompiledStateGraph[Any, Any, Any, Any], thread_id: str, user_text: str
-) -> AsyncIterator[ServerSentEvent]:
+) -> AsyncGenerator[ServerSentEvent]:
     """Run the agent on ``user_text`` in thread ``thread_id`` and yield SSE events.
 
     Only the *new* user message is sent: the checkpointer loads the earlier

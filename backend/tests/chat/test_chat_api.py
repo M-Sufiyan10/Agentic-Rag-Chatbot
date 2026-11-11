@@ -12,9 +12,12 @@ from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatGenerationChunk
 from langchain_core.runnables import RunnableConfig
+from langgraph.checkpoint.memory import InMemorySaver
 
+from app.agent.graph import build_graph
 from app.chat import router as chat_router
 from tests.conftest import FAKE_REPLY, read_sse, register_user
+from tests.fakes import ScriptedChatModel, echo, tool_call_reply
 
 CONVERSATIONS = "/api/conversations"
 
@@ -153,3 +156,23 @@ async def test_retry_after_model_failure_leaves_clean_history(client: httpx.Asyn
         {"role": "user", "content": "hi"},
         {"role": "assistant", "content": "ok"},
     ]
+
+
+async def test_disconnect_rolls_back_before_releasing_id() -> None:
+    # sse-starlette closes the router's generator on disconnect. The rollback of the
+    # incomplete turn must be done by the time that close returns, i.e. before the
+    # conversation is released for a new message (no extra event-loop tick here).
+    model = ScriptedChatModel(replies=[tool_call_reply("echo", {"text": "hi"}, "c1")])
+    graph = build_graph(model, InMemorySaver(), tools=[echo])
+    conversation_id = uuid.uuid4()
+    chat_router.in_progress_conversations.add(conversation_id)
+
+    agen = chat_router.stream_and_release(graph, conversation_id, "x")
+    async for event in agen:
+        if event.event == "tool_end":
+            break
+    await agen.aclose()
+
+    config: RunnableConfig = {"configurable": {"thread_id": str(conversation_id)}}
+    assert (await graph.aget_state(config)).values.get("messages", []) == []
+    assert conversation_id not in chat_router.in_progress_conversations
