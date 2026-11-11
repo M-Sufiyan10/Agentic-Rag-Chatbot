@@ -9,6 +9,12 @@ the configured model, so after a model change old documents are invisible to
 search until they are re-embedded. If the dimension changed too, the vector
 column and its HNSW index are rebuilt at the new size first (which discards
 every existing chunk, since vectors of different sizes can't be converted).
+
+Documents that fail to re-embed (for example because the embedding server is
+down) are marked ``failed``, reported in the summary, and make the command exit
+non-zero. If the run is interrupted part way, documents are left ``processing``
+with their chunks removed; the original files are still in storage, so simply
+running the command again recovers every document.
 """
 
 import asyncio
@@ -16,7 +22,7 @@ import sys
 from typing import NamedTuple
 
 from langchain_core.embeddings import Embeddings
-from sqlalchemy import text, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import Settings, get_settings
@@ -35,6 +41,7 @@ COLUMN_DIMENSION_SQL = (
 class ReindexResult(NamedTuple):
     documents: int
     resized_from: int | None
+    failed: int = 0
 
 
 async def resize_embedding_column(session: AsyncSession, dimensions: int) -> None:
@@ -84,11 +91,32 @@ async def reindex(
             embeddings=embeddings,
             settings=settings,
         )
-    return ReindexResult(documents=len(document_ids), resized_from=resized_from)
+    async with sessionmaker() as session:
+        failed = (
+            await session.execute(
+                select(func.count()).select_from(Document).where(Document.status != "ready")
+            )
+        ).scalar_one()
+    return ReindexResult(documents=len(document_ids), resized_from=resized_from, failed=failed)
 
 
-async def _main() -> None:
+def format_summary(result: ReindexResult, settings: Settings) -> str:
+    summary = f"Reindexed {result.documents} documents with {settings.embedding_model}"
+    if result.resized_from is not None:
+        summary += (
+            f" (resized vectors {result.resized_from} \u2192 {settings.embedding_dimensions})"
+        )
+    if result.failed:
+        summary += f" ({result.failed} failed)"
+    return summary
+
+
+async def _main() -> int:
     settings = get_settings()
+    print(
+        "Reindexing all documents. If this is interrupted, run it again: "
+        "documents are restored from their stored files."
+    )
     engine = create_engine(settings.database_url)
     try:
         result = await reindex(
@@ -99,15 +127,13 @@ async def _main() -> None:
         )
     finally:
         await engine.dispose()
-    summary = f"Reindexed {result.documents} documents with {settings.embedding_model}"
-    if result.resized_from is not None:
-        summary += f" (resized vectors {result.resized_from} → {settings.embedding_dimensions})"
-    print(summary)
+    print(format_summary(result, settings))
+    return 1 if result.failed else 0
 
 
 if __name__ == "__main__":
     try:
-        asyncio.run(_main())
+        sys.exit(asyncio.run(_main()))
     except Exception as exc:
         print(f"Reindex failed: {exc}", file=sys.stderr)
         sys.exit(1)

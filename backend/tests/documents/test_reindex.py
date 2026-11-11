@@ -10,7 +10,7 @@ from app.auth.models import User
 from app.config import Settings
 from app.documents.ingestion import ingest_document
 from app.documents.models import Document, DocumentChunk
-from app.documents.reindex import ReindexResult, reindex, resize_embedding_column
+from app.documents.reindex import ReindexResult, format_summary, reindex, resize_embedding_column
 from app.documents.storage import LocalFileStorage
 
 COLUMN_DIMENSION = (
@@ -134,3 +134,40 @@ async def test_reindex_resizes_column_when_dimensions_change(
         text("SELECT 1 FROM pg_indexes WHERE indexname = 'ix_document_chunks_embedding'")
     )
     assert index.scalar_one() == 1
+
+
+class FailingEmbeddings(Embeddings):
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        raise ConnectionError("ollama down")
+
+    def embed_query(self, text: str) -> list[float]:
+        raise ConnectionError("ollama down")
+
+
+async def test_reindex_counts_documents_that_fail_to_embed(
+    db_session: AsyncSession,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    test_settings: Settings,
+    embeddings: Embeddings,
+    tmp_path: Path,
+) -> None:
+    storage, _ = await _setup(db_session, tmp_path, sessionmaker, test_settings, embeddings)
+
+    result = await reindex(
+        sessionmaker=sessionmaker,
+        storage=storage,
+        embeddings=FailingEmbeddings(),
+        settings=test_settings,
+    )
+
+    assert result == ReindexResult(documents=2, resized_from=None, failed=2)
+    db_session.expire_all()
+    docs = list((await db_session.execute(select(Document))).scalars())
+    assert {d.status for d in docs} == {"failed"}
+
+
+def test_summary_reports_failures(test_settings: Settings) -> None:
+    ok = ReindexResult(documents=2, resized_from=None)
+    assert format_summary(ok, test_settings) == "Reindexed 2 documents with nomic-embed-text"
+    bad = ReindexResult(documents=2, resized_from=None, failed=1)
+    assert format_summary(bad, test_settings).endswith("nomic-embed-text (1 failed)")
