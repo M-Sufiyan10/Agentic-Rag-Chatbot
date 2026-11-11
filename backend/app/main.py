@@ -6,6 +6,7 @@ from typing import Any
 
 from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from langchain_core.embeddings import Embeddings
 from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -19,6 +20,9 @@ from app.chat.router import router as chat_router
 from app.config import Settings, get_settings
 from app.conversations.router import router as conversations_router
 from app.db import create_engine, create_sessionmaker
+from app.documents.embeddings import build_embeddings
+from app.documents.ingestion import fail_interrupted_documents
+from app.documents.storage import LocalFileStorage
 
 
 def create_app(
@@ -27,10 +31,11 @@ def create_app(
     chat_model: BaseChatModel | None = None,
     checkpointer: BaseCheckpointSaver[Any] | None = None,
     tools: Sequence[BaseTool] | None = None,
+    embeddings: Embeddings | None = None,
 ) -> FastAPI:
     """Build the app.
 
-    ``chat_model``, ``checkpointer`` and ``tools`` are a test seam: when given, they
+    ``chat_model``, ``checkpointer``, ``tools`` and ``embeddings`` are a test seam: when given, they
     are used instead of the configured LLM, the Postgres checkpointer and the
     built-in tools (``tools=[]`` disables tools).
     """
@@ -47,6 +52,9 @@ def create_app(
         engine = create_engine(settings.database_url)
         app.state.engine = engine
         app.state.sessionmaker = create_sessionmaker(engine)
+        app.state.storage = LocalFileStorage(settings.upload_dir)
+        app.state.embeddings = embeddings if embeddings is not None else build_embeddings(settings)
+        await fail_interrupted_documents(app.state.sessionmaker)
         async with AsyncExitStack() as stack:
             stack.push_async_callback(engine.dispose)
             saver: BaseCheckpointSaver[Any]

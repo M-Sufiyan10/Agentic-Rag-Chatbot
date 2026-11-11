@@ -4,6 +4,7 @@ import itertools
 import json
 import os
 from collections.abc import AsyncIterator, Iterator
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -12,6 +13,7 @@ from alembic import command
 from alembic.config import Config
 from asgi_lifespan import LifespanManager
 from fastapi import FastAPI
+from langchain_core.embeddings import DeterministicFakeEmbedding, Embeddings
 from langchain_core.language_models import BaseChatModel
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage
@@ -66,9 +68,11 @@ async def db_session() -> AsyncIterator[AsyncSession]:
 
 
 @pytest.fixture
-def test_settings() -> Settings:
+def test_settings(tmp_path: Path) -> Settings:
     return Settings(
-        database_url=TEST_DATABASE_URL, jwt_secret="test-secret-test-secret-test-secret-0123"
+        database_url=TEST_DATABASE_URL,
+        jwt_secret="test-secret-test-secret-test-secret-0123",
+        upload_dir=str(tmp_path),
     )
 
 
@@ -97,6 +101,12 @@ def tools() -> list[BaseTool]:
 
 
 @pytest.fixture
+def embeddings() -> Embeddings:
+    """Deterministic fake embeddings; tests never call a real embedding model."""
+    return DeterministicFakeEmbedding(size=768)
+
+
+@pytest.fixture
 async def app(
     test_settings: Settings,
     chat_model: BaseChatModel,
@@ -105,7 +115,11 @@ async def app(
 ) -> AsyncIterator[FastAPI]:
     """The app with its lifespan running, wired to the fake model and checkpointer."""
     application = create_app(
-        test_settings, chat_model=chat_model, checkpointer=checkpointer, tools=tools
+        test_settings,
+        chat_model=chat_model,
+        checkpointer=checkpointer,
+        tools=tools,
+        embeddings=embeddings,
     )
     async with LifespanManager(application):
         yield application
