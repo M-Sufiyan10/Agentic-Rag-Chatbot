@@ -35,6 +35,20 @@ jobs:
       - run: uv run mypy app
       - run: uv run pytest
 
+  mcp-utils:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mcp-utils
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy .
+      - run: uv run pytest
+
   frontend:
     runs-on: ubuntu-latest
     defaults:

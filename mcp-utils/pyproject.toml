@@ -1,0 +1,37 @@
+[project]
+name = "mcp-utils"
+version = "0.1.0"
+description = "Custom FastMCP server: weather, unit conversion and time-zone conversion"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "mcp",
+    "httpx",
+    "pint",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "ruff",
+    "mypy",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true

@@ -16,5 +16,10 @@ services:
       timeout: 3s
       retries: 10
 
+  mcp-utils:
+    build: ./mcp-utils
+    ports:
+      - "8100:8100"
+
 volumes:
   pgdata:
