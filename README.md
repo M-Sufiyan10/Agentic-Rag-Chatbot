@@ -6,7 +6,7 @@ A multi-user LLM chatbot built the way a production AI app is built: a **LangGra
 
 The goal is more than "a chat box". Over the roadmap below the agent grows tools, document Q&A (RAG), MCP servers, tracing, and a measured evaluation, because the engineering around the LLM is the point.
 
-> **Status:** Milestone 1 (foundation) is complete. See the [roadmap](#roadmap).
+> **Status:** Milestones 1 (foundation) and 2 (agent tools) are complete. See the [roadmap](#roadmap).
 
 ## Screenshots
 
@@ -14,13 +14,14 @@ The goal is more than "a chat box". Over the roadmap below the agent grows tools
 
 _Screenshots and a demo GIF will be added in Milestone 7._
 
-## What works today (M1)
+## What works today (M1 and M2)
 
 - **Auth:** register and log in with email and password (argon2 hashes). Short-lived JWT access tokens, with a refresh token held in an httpOnly cookie.
 - **Conversations:** create, list, rename and delete. Every query is scoped to the signed-in user, and another user's conversation returns `404`.
 - **Streamed chat:** a one-node LangGraph agent replies token by token over SSE. History lives in a Postgres-backed LangGraph checkpointer, so it survives restarts.
 - **Swappable model:** the LLM is chosen by environment variables (Ollama by default).
 - **React UI:** login/register, conversation sidebar, and a chat pane with live streaming and Markdown rendering.
+- **Agent tools (M2):** the agent loops between the model and tools until it can answer. It has a safe `calculator` (an AST evaluator, never `eval`), `current_datetime`, and `web_search` (DuckDuckGo, no API key). The UI shows a live chip per tool call ("Searching the web...") and keeps them on the saved message. A max-rounds guard stops a looping model, long histories are trimmed for the model, a failed or abandoned reply is rolled back so the thread stays valid, and Markdown images in replies are shown as links instead of being fetched.
 - **Quality gates:** pytest (the LLM is always faked in unit tests), ruff, mypy strict, Vitest, oxlint and `tsc`, all run in GitHub Actions.
 
 ## Roadmap
@@ -30,7 +31,7 @@ The full design is in the [spec](docs/superpowers/specs/2026-11-10-agentic-chatb
 | #   | Milestone               | Delivers                                                                                              |
 | --- | ----------------------- | ----------------------------------------------------------------------------------------------------- |
 | M1  | Foundation & thin slice | Postgres, auth, conversations, streamed chat with a LangGraph agent, React UI, CI (**done**)          |
-| M2  | Agent tools             | Tool loop; calculator, current time, web search; tool-status events and chips in the UI               |
+| M2  | Agent tools             | Tool loop; calculator, current time, web search; tool-status events and chips in the UI (**done**)    |
 | M3  | Documents & RAG         | Upload PDF/DOCX/TXT/MD, ingestion into pgvector, per-user document search, citations                  |
 | M4  | MCP                     | A custom FastMCP server plus a third-party one, loaded by the agent from config                       |
 | M5  | Observability           | Langfuse tracing tagged by user and conversation, thumbs feedback as scores                           |
@@ -48,11 +49,11 @@ React (Vite) --POST /api/conversations/{id}/messages--> FastAPI --> LangGraph ag
 
 - `backend/app/auth/`: registration, login, refresh, JWT helpers, the `get_current_user` dependency.
 - `backend/app/conversations/`: conversation CRUD (SQLAlchemy 2 async, Alembic migrations).
-- `backend/app/agent/`: the LangGraph graph (`graph.py`), the model factory (`llm.py`), the Postgres checkpointer (`checkpointer.py`).
+- `backend/app/agent/`: the LangGraph graph (`graph.py`), the model factory (`llm.py`), the Postgres checkpointer (`checkpointer.py`), the prompts, and the tools (`tools/`).
 - `backend/app/chat/`: the send-message endpoint and the graph-to-SSE translation (`streaming.py`).
 - `frontend/src/`: the API client with transparent token refresh (`api/client.ts`), an SSE parser (`api/sse.ts`), and the chat UI (`chat/`).
 
-New to the stack? [`docs/learning/01-foundation.md`](docs/learning/01-foundation.md) walks through how these pieces fit together.
+New to the stack? [`docs/learning/01-foundation.md`](docs/learning/01-foundation.md) walks through how these pieces fit together, and [`docs/learning/02-agent-tools.md`](docs/learning/02-agent-tools.md) explains the tool loop.
 
 ## Prerequisites
 
@@ -112,6 +113,17 @@ export OPENAI_API_KEY=sk-...
 ```
 
 The provider's API key is read from its usual environment variable (such as `OPENAI_API_KEY`) by the LangChain integration, not by this app's `Settings`. An unsupported provider, or a missing provider package, fails at startup with a clear error.
+
+## Agent settings
+
+These optional variables (all in [`.env.example`](.env.example)) tune the agent:
+
+| Variable                     | Default | Meaning                                                              |
+| ---------------------------- | ------- | -------------------------------------------------------------------- |
+| `WEB_SEARCH_MAX_RESULTS`     | `5`     | Results the `web_search` tool returns per query                      |
+| `WEB_SEARCH_TIMEOUT_SECONDS` | `10`    | Timeout for one web search                                           |
+| `AGENT_MAX_TOOL_ROUNDS`      | `5`     | Tool-calling rounds allowed per message before the model must answer |
+| `LLM_MAX_HISTORY_TOKENS`     | `6000`  | Token budget for the history the model sees (the stored one is full) |
 
 ## Running the tests
 
