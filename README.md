@@ -18,7 +18,7 @@ _Screenshots and a demo GIF will be added in Milestone 7._
 
 - **Auth:** register and log in with email and password (argon2 hashes). Short-lived JWT access tokens, with a refresh token held in an httpOnly cookie.
 - **Conversations:** create, list, rename and delete. Every query is scoped to the signed-in user, and another user's conversation returns `404`.
-- **Streamed chat:** a one-node LangGraph agent replies token by token over SSE. History lives in a Postgres-backed LangGraph checkpointer, so it survives restarts.
+- **Streamed chat:** a LangGraph agent (a model node and a tool node in a loop) replies token by token over SSE, with `tool_start`/`tool_end` events when it uses a tool. History lives in a Postgres-backed LangGraph checkpointer, so it survives restarts.
 - **Swappable model:** the LLM is chosen by environment variables (Ollama by default).
 - **React UI:** login/register, conversation sidebar, and a chat pane with live streaming and Markdown rendering.
 - **Agent tools (M2):** the agent loops between the model and tools until it can answer. It has a safe `calculator` (an AST evaluator, never `eval`), `current_datetime`, and `web_search` (DuckDuckGo, no API key). The UI shows a live chip per tool call ("Searching the web...") and keeps them on the saved message. A max-rounds guard stops a looping model, long histories are trimmed for the model, a failed or abandoned reply is rolled back so the thread stays valid, and Markdown images in replies are shown as links instead of being fetched.
@@ -41,9 +41,11 @@ The full design is in the [spec](docs/superpowers/specs/2026-11-10-agentic-chatb
 ## Architecture
 
 ```
-React (Vite) --POST /api/conversations/{id}/messages--> FastAPI --> LangGraph agent --> chat model
-     ^                                                      |             |
-     '------------ SSE: token ... token, done --------------'             '--> Postgres checkpointer
+React (Vite) --POST /api/conversations/{id}/messages--> FastAPI --> LangGraph agent <--> chat model
+     ^                                                      |             |   ^
+     |                                                      |             |   '--> tools: calculator,
+     |                                                      |             |        current_datetime, web_search
+     '-- SSE: token, tool_start, tool_end, ..., done -------'             '--> Postgres checkpointer
                                                                               (chat history per thread)
 ```
 

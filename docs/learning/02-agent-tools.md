@@ -68,7 +68,7 @@ Two details matter:
 - **It never splits a tool pair.** A provider rejects an `AIMessage` with `tool_calls` that has no matching `ToolMessage` (and vice versa). `start_on="human"` forces the kept window to begin at a user message, and `allow_partial=False` forbids cutting a message in half. Since a tool call and its result always come _after_ the human message that started that turn, a window that starts on a human message contains whole turns only.
 - **Only the model's view is trimmed.** The full history stays in the checkpointer, so the UI transcript is unaffected. If even the latest turn is over budget, `_trim_history` falls back to the latest human message rather than sending nothing.
 
-## 6. Two stream modes, six SSE events
+## 6. Two stream modes, five SSE events
 
 **Files:** `backend/app/chat/streaming.py`, `frontend/src/chat/useChatStream.ts`
 
