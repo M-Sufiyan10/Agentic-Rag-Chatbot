@@ -11,24 +11,28 @@ column and its HNSW index are rebuilt at the new size first (which discards
 every existing chunk, since vectors of different sizes can't be converted).
 
 Documents that fail to re-embed (for example because the embedding server is
-down) are marked ``failed``, reported in the summary, and make the command exit
-non-zero. If the run is interrupted part way, documents are left ``processing``
-with their chunks removed; the original files are still in storage, so simply
-running the command again recovers every document.
+down) are marked ``failed``, listed in the summary, and make the command exit
+non-zero. Documents whose files can't be indexed (a scanned PDF, a file over
+``MAX_DOCUMENT_CHUNKS``) are also marked ``failed`` and listed, but don't count
+as an error: running the command again would not change them. If the run is
+interrupted part way, documents are left ``processing`` with their chunks
+removed; the original files are still in storage, so simply running the
+command again recovers every document.
 """
 
 import asyncio
 import sys
+import uuid
 from typing import NamedTuple
 
 from langchain_core.embeddings import Embeddings
-from sqlalchemy import func, select, text, update
+from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import Settings, get_settings
 from app.db import create_engine, create_sessionmaker
 from app.documents.embeddings import build_embeddings
-from app.documents.ingestion import ingest_document
+from app.documents.ingestion import EMBEDDING_FAILED, ingest_document
 from app.documents.models import Document
 from app.documents.storage import FileStorage, LocalFileStorage
 
@@ -38,10 +42,16 @@ COLUMN_DIMENSION_SQL = (
 )
 
 
+class FailedDocument(NamedTuple):
+    filename: str
+    error: str
+
+
 class ReindexResult(NamedTuple):
     documents: int
     resized_from: int | None
-    failed: int = 0
+    failed: tuple[FailedDocument, ...] = ()  # embedding (or other) errors: exit non-zero
+    unreadable: tuple[FailedDocument, ...] = ()  # the file itself can't be indexed
 
 
 async def resize_embedding_column(session: AsyncSession, dimensions: int) -> None:
@@ -91,13 +101,38 @@ async def reindex(
             embeddings=embeddings,
             settings=settings,
         )
+    failed, unreadable = await _failures(sessionmaker, document_ids)
+    return ReindexResult(
+        documents=len(document_ids),
+        resized_from=resized_from,
+        failed=failed,
+        unreadable=unreadable,
+    )
+
+
+async def _failures(
+    sessionmaker: async_sessionmaker[AsyncSession], document_ids: list[uuid.UUID]
+) -> tuple[tuple[FailedDocument, ...], tuple[FailedDocument, ...]]:
+    """Split this run's documents that didn't become ``ready`` into (failed, unreadable).
+
+    Only ``document_ids`` count: a document uploaded during the run is not ours to
+    report. Ingestion records an ``ExtractionError``'s message for a file that can't
+    be indexed and ``EMBEDDING_FAILED`` for everything else.
+    """
     async with sessionmaker() as session:
-        failed = (
-            await session.execute(
-                select(func.count()).select_from(Document).where(Document.status != "ready")
-            )
-        ).scalar_one()
-    return ReindexResult(documents=len(document_ids), resized_from=resized_from, failed=failed)
+        rows = await session.execute(
+            select(Document.filename, Document.status, Document.error)
+            .where(Document.id.in_(document_ids), Document.status != "ready")
+            .order_by(Document.filename)
+        )
+    failed: list[FailedDocument] = []
+    unreadable: list[FailedDocument] = []
+    for filename, status, error in rows:
+        if status == "failed" and error and error != EMBEDDING_FAILED:
+            unreadable.append(FailedDocument(filename, error))
+        else:
+            failed.append(FailedDocument(filename, error or f"still {status}"))
+    return tuple(failed), tuple(unreadable)
 
 
 def format_summary(result: ReindexResult, settings: Settings) -> str:
@@ -107,7 +142,16 @@ def format_summary(result: ReindexResult, settings: Settings) -> str:
             f" (resized vectors {result.resized_from} \u2192 {settings.embedding_dimensions})"
         )
     if result.failed:
-        summary += f" ({result.failed} failed)"
+        summary += f" ({len(result.failed)} failed)"
+    if result.unreadable:
+        summary += f" ({len(result.unreadable)} could not be indexed from their files)"
+    for title, documents in [
+        ("Failed (fix the cause and run reindex again):", result.failed),
+        ("Could not be indexed (not an error; the user can replace these):", result.unreadable),
+    ]:
+        if documents:
+            summary += f"\n{title}"
+            summary += "".join(f"\n  - {d.filename}: {d.error}" for d in documents)
     return summary
 
 
