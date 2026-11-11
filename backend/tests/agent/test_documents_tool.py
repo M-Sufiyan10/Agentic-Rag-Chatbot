@@ -215,3 +215,20 @@ async def test_missing_user_id_is_unavailable(search_tool: BaseTool) -> None:
 
     assert message.text == UNAVAILABLE
     assert message.artifact == []
+
+
+async def test_nothing_found_text_with_mismatch_note(
+    db_session: AsyncSession, embeddings: Embeddings, search_tool: BaseTool
+) -> None:
+    # Ready documents, but every chunk was embedded by another model: no rows match.
+    alice = await _user(db_session)
+    await _document(db_session, embeddings, alice, ["zebra", "migration"], embedding_model="old")
+
+    message = await _call(search_tool, "zebra migration", str(alice.id))
+
+    assert message.text == (
+        "No matching passages were found in your documents.\n\n"
+        "Note: 2 chunks were indexed with a different embedding model and were skipped; "
+        "ask the administrator to run the reindex command."
+    )
+    assert message.artifact == []

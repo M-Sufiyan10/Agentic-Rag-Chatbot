@@ -294,3 +294,21 @@ async def test_no_citations_event_without_search_documents() -> None:
     events = await _collect(graph, "say hi")
 
     assert "citations" not in [n for n, _ in events]
+
+
+async def test_no_citations_event_when_run_fails_after_a_search() -> None:
+    model = ScriptedChatModel(
+        replies=[
+            tool_call_reply("search_documents", {"query": "a"}, "c1"),
+            ConnectionError("model server down"),
+        ]
+    )
+    graph = build_graph(model, InMemorySaver(), tools=[fake_search_documents])
+
+    events = await _collect(graph, "what do my notes say")
+
+    names = [n for n, _ in events]
+    assert "tool_end" in names  # the search itself succeeded
+    assert "citations" not in names
+    assert events[-1] == ("error", {"message": MODEL_ERROR_MESSAGE})
+    assert await _state_messages(graph) == []

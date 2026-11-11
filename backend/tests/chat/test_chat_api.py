@@ -335,3 +335,34 @@ async def test_documents_note_for_processing_only(
     assert _system_prompt(chat_model.calls[0]) == (
         SYSTEM_PROMPT + "\n\n" + DOCUMENTS_PROCESSING_NOTE
     )
+
+
+@pytest.mark.parametrize(
+    "chat_model",
+    [
+        ScriptedChatModel(
+            replies=[
+                tool_call_reply("search_documents", {"query": "a"}, "c1"),
+                ConnectionError("model server down"),
+                AIMessage("ok"),
+            ]
+        )
+    ],
+)
+@pytest.mark.parametrize("tools", [[fake_search_documents]])
+async def test_failed_turn_after_search_leaves_no_citations(client: httpx.AsyncClient) -> None:
+    headers = await register_user(client)
+    cid = await _new_conversation(client, headers)
+
+    failed = await client.post(_messages_url(cid), json={"content": "notes?"}, headers=headers)
+    names = [name for name, _ in read_sse(failed)]
+    assert "citations" not in names
+    assert names[-1] == "error"
+    assert (await client.get(_messages_url(cid), headers=headers)).json() == []
+
+    retry = await client.post(_messages_url(cid), json={"content": "hi"}, headers=headers)
+    assert "citations" not in [name for name, _ in read_sse(retry)]
+    assert (await client.get(_messages_url(cid), headers=headers)).json() == [
+        {"role": "user", "content": "hi", "tools": [], "citations": []},
+        {"role": "assistant", "content": "ok", "tools": [], "citations": []},
+    ]
