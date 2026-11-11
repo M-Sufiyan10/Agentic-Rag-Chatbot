@@ -33,7 +33,7 @@ The full design is in the [spec](docs/superpowers/specs/2026-11-10-agentic-chatb
 | --- | ----------------------- | ----------------------------------------------------------------------------------------------------- |
 | M1  | Foundation & thin slice | Postgres, auth, conversations, streamed chat with a LangGraph agent, React UI, CI (**done**)          |
 | M2  | Agent tools             | Tool loop; calculator, current time, web search; tool-status events and chips in the UI (**done**)    |
-| M3  | Documents & RAG         | Upload PDF/DOCX/TXT/MD, ingestion into pgvector, per-user document search, citations (**done**)        |
+| M3  | Documents & RAG         | Upload PDF/DOCX/TXT/MD, ingestion into pgvector, per-user document search, citations (**done**)       |
 | M4  | MCP                     | A custom FastMCP server plus a third-party one, loaded by the agent from config                       |
 | M5  | Observability           | Langfuse tracing tagged by user and conversation, thumbs feedback as scores                           |
 | M6  | Evaluation              | Eval dataset and runner, LLM judge, tool-selection / retrieval / faithfulness metrics, 4B vs 8B model |
@@ -58,7 +58,7 @@ React (Vite) --POST /api/conversations/{id}/messages--> FastAPI --> LangGraph ag
 - `backend/app/chat/`: the send-message endpoint and the graph-to-SSE translation (`streaming.py`).
 - `frontend/src/`: the API client with transparent token refresh (`api/client.ts`), an SSE parser (`api/sse.ts`), and the chat UI (`chat/`).
 
-New to the stack? [`docs/learning/01-foundation.md`](docs/learning/01-foundation.md) walks through how these pieces fit together, and [`docs/learning/02-agent-tools.md`](docs/learning/02-agent-tools.md) explains the tool loop, and [`docs/learning/03-documents-rag.md`](docs/learning/03-documents-rag.md) covers embeddings, ingestion, pgvector and per-user isolation.
+New to the stack? [`docs/learning/01-foundation.md`](docs/learning/01-foundation.md) walks through how these pieces fit together, [`docs/learning/02-agent-tools.md`](docs/learning/02-agent-tools.md) explains the tool loop, and [`docs/learning/03-documents-rag.md`](docs/learning/03-documents-rag.md) covers embeddings, ingestion, pgvector and per-user isolation.
 
 ## Prerequisites
 
@@ -124,14 +124,14 @@ The provider's API key is read from its usual environment variable (such as `OPE
 
 These optional variables (all in [`.env.example`](.env.example)) tune the agent:
 
-| Variable                     | Default | Meaning                                                              |
-| ---------------------------- | ------- | -------------------------------------------------------------------- |
-| `WEB_SEARCH_MAX_RESULTS`     | `5`     | Results the `web_search` tool returns per query                      |
-| `WEB_SEARCH_TIMEOUT_SECONDS` | `10`    | Timeout and overall deadline for one web search                      |
-| `WEB_SEARCH_BACKEND`         | see below | ddgs engine(s), comma list allowed; keyless, but see the caveat below |
-| `OLLAMA_NUM_CTX`             | `8192`  | Ollama context window; `LLM_MAX_HISTORY_TOKENS` must be at most this minus 1500 |
-| `AGENT_MAX_TOOL_ROUNDS`      | `5`     | Tool-calling rounds allowed per message before the model must answer |
-| `LLM_MAX_HISTORY_TOKENS`     | `6000`  | Token budget for the history the model sees (the stored one is full) |
+| Variable                     | Default   | Meaning                                                                         |
+| ---------------------------- | --------- | ------------------------------------------------------------------------------- |
+| `WEB_SEARCH_MAX_RESULTS`     | `5`       | Results the `web_search` tool returns per query                                 |
+| `WEB_SEARCH_TIMEOUT_SECONDS` | `10`      | Timeout and overall deadline for one web search                                 |
+| `WEB_SEARCH_BACKEND`         | see below | ddgs engine(s), comma list allowed; keyless, but see the caveat below           |
+| `OLLAMA_NUM_CTX`             | `8192`    | Ollama context window; `LLM_MAX_HISTORY_TOKENS` must be at most this minus 1500 |
+| `AGENT_MAX_TOOL_ROUNDS`      | `5`       | Tool-calling rounds allowed per message before the model must answer            |
+| `LLM_MAX_HISTORY_TOKENS`     | `6000`    | Token budget for the history the model sees (the stored one is full)            |
 
 **Web search caveat:** `web_search` relies on a third-party, keyless metasearch library (ddgs) scraping public engines, so it can be slow, rate-limited or fail; the agent then tells the user the search failed. Some engines return nothing from some networks, so try another `WEB_SEARCH_BACKEND` (default `duckduckgo,brave,yahoo,startpage`; unknown engine names are rejected at startup) if results are empty.
 
@@ -139,17 +139,17 @@ These optional variables (all in [`.env.example`](.env.example)) tune the agent:
 
 Supported uploads are `.pdf`, `.docx`, `.txt` and `.md`, up to `MAX_UPLOAD_MB` (default 10; larger files get `413`, unsupported or mismatched files `415`). Scanned PDFs with no text layer are marked `failed`. Uploaded files are stored under `UPLOAD_DIR` (gitignored) and never served back. These optional variables are in [`.env.example`](.env.example):
 
-| Variable               | Default            | Meaning                                                         |
-| ---------------------- | ------------------ | --------------------------------------------------------------- |
-| `EMBEDDING_PROVIDER`   | `ollama`           | Provider name for LangChain's `init_embeddings`                 |
-| `EMBEDDING_MODEL`      | `nomic-embed-text` | Embedding model                                                 |
-| `EMBEDDING_DIMENSIONS` | `768`              | Vector size; fixes the column size when the migration runs      |
-| `UPLOAD_DIR`           | `./data/uploads`   | Where uploaded files are stored                                 |
-| `MAX_UPLOAD_MB`        | `10`               | Upload size limit                                               |
-| `CHUNK_SIZE`           | `1000`             | Characters per chunk                                            |
-| `CHUNK_OVERLAP`        | `150`              | Characters shared between neighbouring chunks                   |
-| `RETRIEVAL_K`          | `4`                | Chunks returned per search (no reranking)                       |
-| `MAX_DOCUMENT_CHUNKS`  | `500`              | Documents with more chunks are marked `failed`, not embedded    |
+| Variable               | Default            | Meaning                                                      |
+| ---------------------- | ------------------ | ------------------------------------------------------------ |
+| `EMBEDDING_PROVIDER`   | `ollama`           | Provider name for LangChain's `init_embeddings`              |
+| `EMBEDDING_MODEL`      | `nomic-embed-text` | Embedding model                                              |
+| `EMBEDDING_DIMENSIONS` | `768`              | Vector size; fixes the column size when the migration runs   |
+| `UPLOAD_DIR`           | `./data/uploads`   | Where uploaded files are stored                              |
+| `MAX_UPLOAD_MB`        | `10`               | Upload size limit                                            |
+| `CHUNK_SIZE`           | `1000`             | Characters per chunk                                         |
+| `CHUNK_OVERLAP`        | `150`              | Characters shared between neighbouring chunks                |
+| `RETRIEVAL_K`          | `4`                | Chunks returned per search (no reranking)                    |
+| `MAX_DOCUMENT_CHUNKS`  | `500`              | Documents with more chunks are marked `failed`, not embedded |
 
 **Changing the embedding model:** each chunk remembers the model that embedded it, and search only uses chunks from the configured model (it tells the model when some were skipped). After changing `EMBEDDING_MODEL` or `EMBEDDING_DIMENSIONS`, re-embed everything, resizing the vector column if needed:
 
@@ -160,7 +160,7 @@ uv run python -m app.documents.reindex
 
 It exits non-zero if any document fails; fix the cause and run it again.
 
-A small model may not always choose to call `search_documents`; naming "my documents" in the question helps.
+**Will the model search?** Each turn the server tells the model which documents the user has (their ready filenames, at most 20), so it knows there is something to search. In live runs with the default 4B model this made "What is the codename of the Zephyr-9 project according to my documents?" call `search_documents` and answer with a citation 3 times out of 3. A question that doesn't mention documents ("What's the Zephyr-9 project's codename?") still never did (0 of 9 live runs across two wordings of the note, including "What's the budget of the Zephyr-9 project?"), so mention your documents when you ask. The measured runs are in [note 3, sections 8 and 9](docs/learning/03-documents-rag.md#8-telling-the-model-what-you-have).
 
 ## Running the tests
 

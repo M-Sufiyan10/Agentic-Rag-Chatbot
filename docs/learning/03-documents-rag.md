@@ -27,6 +27,11 @@ processing --> ready     (chunks stored; searchable)
 
 `ingest_document` never raises: extraction problems (a scanned PDF with no text, a corrupt file) record their own message, and anything else (typically Ollama being down) records a generic "embedding model may be unavailable" message. The frontend polls the list while any document is `processing`.
 
+Two guards keep one big upload from hurting everyone else:
+
+- **Parsing runs in a worker thread.** `extract_text` and `chunk_pages` are plain CPU work (a 10 MB text file took 4.6 s to chunk). The background task runs on the same event loop as every request, so it calls them through `asyncio.to_thread`; otherwise every chat stream and login would freeze meanwhile.
+- **A chunk cap.** Embedding is the slow part: on a laptop CPU `nomic-embed-text` managed about one chunk per second, so a 10 MB text file (about 12,000 chunks) would take hours. A document with more than `MAX_DOCUMENT_CHUNKS` (default 500, roughly 500 KB of text) is marked `failed` with "This document is too long to index (N passages; the limit is 500). Split it into smaller files." before any embedding call.
+
 A background task lives in the server process, so a restart loses it. On startup `fail_interrupted_documents` (called from the lifespan in `main.py`) marks anything still `processing` as `failed` with "Processing was interrupted by a server restart. Delete and upload it again." A real job queue would be better at scale; for one process this is honest and simple.
 
 Files are never served back; the only things that read them are ingestion and `reindex`.
@@ -50,6 +55,8 @@ These are defaults, not truths. M6 (evaluation) is where you would tune them wit
 Postgres stores the vectors using the **pgvector** extension (the Docker image is `pgvector/pgvector:pg17`). `DocumentChunk.embedding` is a `Vector(768)` column; the size comes from `EMBEDDING_DIMENSIONS` when the migration runs. Searching is `ORDER BY embedding <=> :query LIMIT k` (`<=>` is cosine distance), written in `retrieval.py` as `DocumentChunk.embedding.cosine_distance(...)`.
 
 Comparing a query against every row is exact but slow once there are many chunks, so there is an **HNSW** index (`vector_cosine_ops`). HNSW is an approximate nearest-neighbour graph: it trades a tiny chance of missing the true best match for much faster search. The index operator class has to match the distance you query with, which is why both say "cosine".
+
+**A trap with filters.** All users' chunks share one table and one index. An HNSW scan returns `hnsw.ef_search` (default 40) nearest candidates from the _whole_ table, and only then does Postgres apply `WHERE user_id = ...`. If someone else's chunks fill those 40 slots, a user with one small document gets fewer than `k` passages, or none. Isolation still holds (the filter always runs); recall silently drops as the table grows. pgvector 0.8 fixes this with **iterative index scans**: `search_chunks` runs `SET LOCAL hnsw.iterative_scan = relaxed_order`, so the scan keeps going until `k` rows pass the filter. "Relaxed order" may return them slightly out of order, so the query is wrapped in a CTE and sorted again outside. `test_search_finds_k_own_chunks_among_many_others_through_the_index` forces the index plan and returned 0 of 4 rows before the fix.
 
 Each chunk also stores `embedding_model` (see section 7) and a copy of `user_id` (see section 5).
 
@@ -83,25 +90,56 @@ Vectors from different embedding models are not comparable; even the same dimens
 - every chunk records the `embedding_model` that made it;
 - `search_chunks` only searches chunks whose model matches the configured one;
 - if some of the user's chunks do not match, the tool output appends a note saying so, so the model can pass it on instead of just returning "nothing found";
-- `uv run python -m app.documents.reindex` fixes it: it deletes all chunks, marks every document `processing`, resizes the vector column and rebuilds the HNSW index if `EMBEDDING_DIMENSIONS` changed, then re-ingests every document from its stored file. It prints a summary, lists failures and exits non-zero if any document failed. If it is interrupted, run it again; the original files are the source of truth.
+- `uv run python -m app.documents.reindex` fixes it: it deletes all chunks, resizes the vector column and rebuilds the HNSW index if `EMBEDDING_DIMENSIONS` changed, marks every document `processing`, then re-ingests every document from its stored file. It prints a summary that lists each document that didn't become `ready`, with its error. Embedding failures (say, Ollama down) make it exit non-zero: fix the cause and run it again. Files that simply can't be indexed (a scanned PDF, a file over the chunk cap) are listed too but don't fail the run, because running it again would not change them. If it is interrupted, run it again; the original files are the source of truth.
 
 That is why uploaded files are kept at all, even though they are never served.
 
-## 8. Live results (recorded on 2026-11-11)
+## 8. Telling the model what you have
 
-Checked against a real backend (port 8010), real Postgres, Ollama `qwen3:4b-instruct-2507-q4_K_M` and `nomic-embed-text`, with curl:
+**Files:** `backend/app/chat/router.py` (`send_message`), `backend/app/documents/retrieval.py` (`document_overview`), `backend/app/agent/prompts.py` (`documents_note`), `backend/app/agent/graph.py` (the `agent` node)
 
-- Upload `zephyr.md` (invented facts: "The Zephyr-9 project codename is BLUE HERON. Its budget is 42,000 credits..."): status went `processing` then `ready` with 1 chunk within seconds.
-- Upload a blank one-page PDF: `failed`, with "No text could be extracted (scanned PDFs are not supported)."
-- "What is the codename of the Zephyr-9 project according to my documents?": **the 4B model did not call `search_documents`** and answered "I don't have access to your documents". Same for "Search my documents for the Zephyr-9 project and tell me its codename."
-- "Use your search_documents tool to look up the Zephyr-9 project codename in my uploaded files.": the model called the tool (`tool_start` with query "Zephyr-9 project codename"), `tool_end` returned the passage, one `citations` event named `zephyr.md` (chunk 0), and the answer was "The Zephyr-9 project codename is BLUE HERON [1]."
-- Second user, same question: the model again did not call the tool in the natural phrasing. With the explicit phrasing it called the tool and got "You have no ready documents to search. Upload one from the Documents panel." No citation event, no leak. `GET /api/documents/<user 1's id>` as user 2 returned `404` and their list was `[]`.
+The first live check (section 9) showed the 4B model answering "I don't have access to your documents" without ever calling `search_documents`, even when asked "according to my documents". Nothing in its context said this user _had_ documents, and its prior ("I can't see your files") beat the static instruction in the system prompt.
 
-The lesson is the same as in note 2: whether a small model picks a tool is a property of the model and the prompt, not of the plumbing. The retrieval, citation and isolation parts worked every time they ran. Making tool choice reliable (a stronger model, or a retrieval step that always runs) is something to measure in M6.
+So each turn the server tells it. `send_message` looks up the authenticated user's ready filenames (newest first, at most 20) and how many are still processing, and passes them to the run as one nested dict, `config["configurable"]["documents"]`. The `agent` node appends a note to the one system message:
+
+- with ready documents: _The user has uploaded these documents: "zephyr9-brief.pdf". You have not seen their contents; the only way to read them is the search_documents tool. If a question might be answered by them, call search_documents before answering, even if the user doesn't mention their documents. Never say you cannot access the user's documents, and never say what they do or don't contain without searching them first._ (More than 20 adds "(and N more)".)
+- with only processing documents: a note that they can't be searched yet;
+- otherwise nothing, so the prompt is exactly the M2 one.
+
+Details worth noticing:
+
+- **It is a dict on purpose.** LangGraph copies every top-level `str`/`int`/`float`/`bool` value in `configurable` into each checkpoint's metadata (that is how `thread_id` and `user_id` end up there). Dicts are skipped, so filenames never land in the checkpoint. The note itself is never written to state either; like the system prompt, it is rebuilt on every model call.
+- **Filenames are user input in a system message.** Only your own filenames reach your own prompt, so there is no cross-user path, but each name is still stripped of control characters, cut to 80 characters and JSON-quoted. Uploads also drop control characters from filenames now (a NUL byte used to cause a 500).
+- **Agentic, not always-on.** The alternative is to embed every message and inject the top passages before the model runs. That costs an embedding call per turn, pushes irrelevant passages into unrelated questions, and skips the tool loop this project is about. The note is one indexed query and no extra tokens for users without documents.
+
+## 9. Live results (recorded on 2026-11-11)
+
+Checked against a real backend (port 8010), real Postgres, Ollama `qwen3:4b-instruct-2507-q4_K_M` and `nomic-embed-text`, with curl. Every question was asked in a new conversation, three times, because the model is not deterministic.
+
+**Before the documents note** (first check, `zephyr.md` uploaded): "What is the codename of the Zephyr-9 project according to my documents?" and "Search my documents for the Zephyr-9 project and tell me its codename." never called the tool (0 of 2 runs); only naming the tool ("Use your search_documents tool to ...") did.
+
+**With the documents note**, after uploading a one-page **text PDF**, `zephyr9-brief.pdf` (invented facts: "The Zephyr-9 project codename is BLUE HERON. Its budget is 42,000 credits..."). It was already `ready`, with 1 chunk, at the first status check after the upload returned.
+
+| Question                                                                  | First wording of the note | Final wording                     |
+| ------------------------------------------------------------------------- | ------------------------- | --------------------------------- |
+| "What is the codename of the Zephyr-9 project according to my documents?" | 2 of 3 called the tool    | 3 of 3                            |
+| "What's the Zephyr-9 project's codename?"                                 | 0 of 3                    | 0 of 3                            |
+| "What's the budget of the Zephyr-9 project?"                              | not run                   | 0 of 3                            |
+| "What is 17 × 23?" (should _not_ search)                                  | not run                   | 0 of 3 searched; all answered 391 |
+| Second user, no documents, first question                                 | not run                   | 0 of 3 leaked                     |
+
+- Every run that called the tool did it right: `tool_start search_documents`, a `tool_end` with the passage, one `citations` event naming `zephyr9-brief.pdf` (chunk 0), and the answer "The codename of the Zephyr-9 project is BLUE HERON [1]."
+- When the question didn't mention documents, the model never searched. With the first wording, all three runs claimed the PDF didn't mention a codename (for example "The provided document "zephyr9-brief.pdf" does not contain information about the Zephyr-9 project's codename. [1]"), a confident claim about a file it had never opened. That is why the final note says the model has not seen the contents and must not say what they contain without searching. It didn't fix the behaviour: with the final wording, one codename run said the document "has not been searched", the other two still said "The provided documents do not contain information about the Zephyr-9 project's codename", and the three budget runs said "I don't have information about the budget". A more forceful wording ("you MUST call search_documents first...") brought back the exact false claim in a quick one-step check, so it was not kept.
+- The model sometimes adds a made-up bracket such as "[1]" or "[No relevant passages found in uploaded documents.]" without having searched. No `citations` event is sent in those runs, so the UI shows no sources.
+- The second user's prompt had no note (no documents), the model didn't call the tool, and nothing of user 1's appeared: no filename, no BLUE HERON. As user 2, `GET /api/documents` returned `[]` and `GET /api/documents/<user 1's id>` returned `404`.
+
+The lesson from note 2 holds, with a twist: telling the model what exists fixed the explicit case (0 of 2 before; 5 of 6 with the note, 3 of 3 with the final wording), but a 4B model still won't connect "Zephyr-9" to a file called `zephyr9-brief.pdf` on its own, and the note can make it overconfident about files it hasn't opened. The retrieval, citation and isolation parts worked every time they ran. For now, mention your documents when you ask; making the implicit case work (a stronger model, or retrieval that always runs) is for M6 to measure.
+
+Deleting a document does not scrub old conversations: the passages the tool returned are still in that conversation's saved history (same user only).
 
 ## Try it yourself
 
-1. **Watch it in the UI.** Upload a short `.md` file in the Documents panel, wait for `ready`, then ask about it and name your documents. Expand the "Sources" rows under the answer.
+1. **Watch it in the UI.** Upload a short `.md` or text PDF in the Documents panel, wait for `ready`, then ask about it and mention your documents ("... according to my documents?"; section 9 shows why). Expand the "Sources" rows under the answer.
 2. **Watch it on the wire.** Following the curl recipe in note 2, upload with `curl -F file=@notes.md $B/api/documents -H "authorization: Bearer $TOKEN"`, poll `GET $B/api/documents/<id>` until `ready`, then stream a question and look for `tool_start`, `tool_end` and `citations`.
 3. **Look inside Postgres.** `SELECT chunk_index, embedding_model, left(content, 60) FROM document_chunks;` and `\d document_chunks` to see the HNSW index.
 4. **Change the chunking.** Set `CHUNK_SIZE=300`, upload a longer file, and compare what comes back.
@@ -113,5 +151,6 @@ The lesson is the same as in note 2: whether a small model picks a tool is a pro
 - `backend/app/documents/`: `models.py`, `storage.py`, `extraction.py` (extract and chunk), `embeddings.py`, `ingestion.py`, `retrieval.py`, `router.py`/`service.py`/`schemas.py`, `reindex.py`
 - `backend/alembic/versions/0002_documents.py`: tables, vector column, HNSW index
 - `backend/app/agent/tools/documents.py`: `search_documents`
+- `backend/app/agent/prompts.py` (`documents_note`) and `backend/app/chat/router.py`: the per-turn documents note
 - `backend/app/chat/streaming.py` and `router.py`: `citations` event and transcript citations
 - `frontend/src/documents/` (`api.ts`, `DocumentsPanel.tsx`) and `frontend/src/chat/Citations.tsx`
