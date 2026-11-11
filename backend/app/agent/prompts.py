@@ -28,9 +28,11 @@ FINAL_ROUND_INSTRUCTION = (
 )
 
 DOCUMENTS_READY_NOTE = (
-    "The user has uploaded these documents, which you can search with search_documents: "
-    "{names}{more}. If a question might be answered by them, call search_documents before "
-    "answering. Never say you cannot access the user's documents."
+    "The user has uploaded these documents: {names}{more}. You have not seen their contents; "
+    "the only way to read them is the search_documents tool. If a question might be answered "
+    "by them, call search_documents before answering, even if the user doesn't mention their "
+    "documents. Never say you cannot access the user's documents, and never say what they do "
+    "or don't contain without searching them first."
 )
 DOCUMENTS_PROCESSING_NOTE = (
     "The user's uploaded documents are still being processed and can't be searched yet. "

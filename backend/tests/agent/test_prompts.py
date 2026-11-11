@@ -3,18 +3,17 @@
 from app.agent.prompts import DOCUMENTS_PROCESSING_NOTE, documents_note
 
 READY_TAIL = (
-    ". If a question might be answered by them, call search_documents before answering. "
-    "Never say you cannot access the user's documents."
+    ". You have not seen their contents; the only way to read them is the search_documents "
+    "tool. If a question might be answered by them, call search_documents before answering, "
+    "even if the user doesn't mention their documents. Never say you cannot access the user's "
+    "documents, and never say what they do or don't contain without searching them first."
 )
 
 
 def test_ready_documents_are_listed() -> None:
     note = documents_note({"ready": ["zephyr.md", "report.pdf"], "ready_total": 2, "processing": 0})
 
-    assert note == (
-        "The user has uploaded these documents, which you can search with search_documents: "
-        '"zephyr.md", "report.pdf"' + READY_TAIL
-    )
+    assert note == ('The user has uploaded these documents: "zephyr.md", "report.pdf"' + READY_TAIL)
 
 
 def test_more_documents_than_listed_are_counted() -> None:
