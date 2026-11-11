@@ -203,3 +203,26 @@ async def test_tool_events_streamed_and_listed_in_transcript(client: httpx.Async
         {"role": "user", "content": "say hi", "tools": []},
         {"role": "assistant", "content": "It said hi", "tools": ["echo"]},
     ]
+
+
+@pytest.mark.parametrize(
+    "chat_model",
+    [
+        ScriptedChatModel(
+            replies=[
+                tool_call_reply("echo", {"text": "hi"}, "c1", content="Let me check."),
+                AIMessage("answer"),
+            ]
+        )
+    ],
+)
+@pytest.mark.parametrize("tools", [[echo]])
+async def test_transcript_skips_preamble_of_tool_call_message(client: httpx.AsyncClient) -> None:
+    headers = await register_user(client)
+    cid = await _new_conversation(client, headers)
+    await client.post(_messages_url(cid), json={"content": "say hi"}, headers=headers)
+    history = await client.get(_messages_url(cid), headers=headers)
+    assert history.json() == [
+        {"role": "user", "content": "say hi", "tools": []},
+        {"role": "assistant", "content": "answer", "tools": ["echo"]},
+    ]

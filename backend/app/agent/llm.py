@@ -21,6 +21,7 @@ def build_chat_model(settings: Settings) -> BaseChatModel:
     kwargs: dict[str, Any] = {"temperature": settings.llm_temperature}
     if settings.llm_provider == "ollama":
         kwargs["base_url"] = settings.ollama_base_url
+        kwargs["num_ctx"] = settings.ollama_num_ctx
     try:
         model: BaseChatModel = init_chat_model(
             model=settings.llm_model, model_provider=settings.llm_provider, **kwargs

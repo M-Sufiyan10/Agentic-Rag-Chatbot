@@ -116,6 +116,10 @@ async def get_messages(
                 transcript.append(MessageOut(role="user", content=message.content))
         elif isinstance(message, AIMessage):
             tools_used.extend(call["name"] for call in message.tool_calls)
+            # A preamble that came with tool calls is not an answer; the chips attach to
+            # the final reply, matching the live view.
+            if message.tool_calls:
+                continue
             if isinstance(message.content, str) and message.content:
                 transcript.append(
                     MessageOut(role="assistant", content=message.content, tools=tools_used)

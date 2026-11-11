@@ -21,7 +21,7 @@ _Screenshots and a demo GIF will be added in Milestone 7._
 - **Streamed chat:** a LangGraph agent (a model node and a tool node in a loop) replies token by token over SSE, with `tool_start`/`tool_end` events when it uses a tool. History lives in a Postgres-backed LangGraph checkpointer, so it survives restarts.
 - **Swappable model:** the LLM is chosen by environment variables (Ollama by default).
 - **React UI:** login/register, conversation sidebar, and a chat pane with live streaming and Markdown rendering.
-- **Agent tools (M2):** the agent loops between the model and tools until it can answer. It has a safe `calculator` (an AST evaluator, never `eval`), `current_datetime`, and `web_search` (DuckDuckGo, no API key). The UI shows a live chip per tool call ("Searching the web...") and keeps them on the saved message. A max-rounds guard stops a looping model, long histories are trimmed for the model, a failed or abandoned reply is rolled back so the thread stays valid, and Markdown images in replies are shown as links instead of being fetched.
+- **Agent tools (M2):** the agent loops between the model and tools until it can answer. It has a safe `calculator` (an AST evaluator, never `eval`), `current_datetime`, and `web_search` (keyless metasearch via ddgs; see the caveat under Agent settings). The UI shows a live chip per tool call ("Searching the web...") and keeps them on the saved message. A max-rounds guard stops a looping model, long histories are trimmed for the model, a failed or abandoned reply is rolled back so the thread stays valid, and Markdown images in replies are shown as links instead of being fetched.
 - **Quality gates:** pytest (the LLM is always faked in unit tests), ruff, mypy strict, Vitest, oxlint and `tsc`, all run in GitHub Actions.
 
 ## Roadmap
@@ -123,9 +123,13 @@ These optional variables (all in [`.env.example`](.env.example)) tune the agent:
 | Variable                     | Default | Meaning                                                              |
 | ---------------------------- | ------- | -------------------------------------------------------------------- |
 | `WEB_SEARCH_MAX_RESULTS`     | `5`     | Results the `web_search` tool returns per query                      |
-| `WEB_SEARCH_TIMEOUT_SECONDS` | `10`    | Timeout for one web search                                           |
+| `WEB_SEARCH_TIMEOUT_SECONDS` | `10`    | Timeout and overall deadline for one web search                      |
+| `WEB_SEARCH_BACKEND`         | `bing`  | ddgs engine(s), comma list allowed; keyless, but see the caveat below |
+| `OLLAMA_NUM_CTX`             | `8192`  | Ollama context window; `LLM_MAX_HISTORY_TOKENS` must be at most this minus 1500 |
 | `AGENT_MAX_TOOL_ROUNDS`      | `5`     | Tool-calling rounds allowed per message before the model must answer |
 | `LLM_MAX_HISTORY_TOKENS`     | `6000`  | Token budget for the history the model sees (the stored one is full) |
+
+**Web search caveat:** `web_search` relies on a third-party, keyless metasearch library (ddgs) scraping public engines, so it can be slow, rate-limited or fail; the agent then tells the user the search failed. Some engines return nothing from some networks, so try another `WEB_SEARCH_BACKEND` if results are empty.
 
 ## Running the tests
 

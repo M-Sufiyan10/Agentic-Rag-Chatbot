@@ -1,3 +1,4 @@
+import time
 from datetime import datetime
 from typing import Any
 
@@ -39,6 +40,9 @@ def test_evaluate_arithmetic(expr: str, expected: float) -> None:
         "'a' * 3",
         "",
         "x.y",
+        "(((10**6)**100)**99)**99",
+        "(1000000**100)**99",
+        "1e308*10",
     ],
 )
 def test_evaluate_rejects(expr: str) -> None:
@@ -108,6 +112,7 @@ async def test_web_search_formats_results(monkeypatch: pytest.MonkeyPatch) -> No
     assert "Released..." in out
     assert seen["text"]["max_results"] == 3
     assert seen["init"]["timeout"] == 7
+    assert seen["text"]["backend"] == "bing"
     assert seen["query"] == "langgraph"
 
 
@@ -125,6 +130,27 @@ async def test_web_search_failure_is_reported(monkeypatch: pytest.MonkeyPatch) -
     assert "ratelimit" in out
 
 
+async def test_web_search_backend_is_passed_through(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen = _fake_ddgs(monkeypatch, results=[])
+    tool = web_search.make_web_search_tool(max_results=5, timeout=10, backend="brave,bing")
+    await tool.ainvoke({"query": "x"})
+    assert seen["text"]["backend"] == "brave,bing"
+
+
+async def test_web_search_deadline_returns_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    class SlowDDGS:
+        def __init__(self, **kwargs: Any) -> None: ...
+
+        def text(self, query: str, **kwargs: Any) -> list[dict[str, str]]:
+            time.sleep(1)
+            return []
+
+    monkeypatch.setattr(web_search, "DDGS", SlowDDGS)
+    tool = web_search.make_web_search_tool(max_results=5, timeout=0.05)
+    out = await tool.ainvoke({"query": "x"})
+    assert out.startswith("Error: web search timed out")
+
+
 def test_build_tools_names(test_settings: Settings) -> None:
     names = [t.name for t in build_tools(test_settings)]
     assert names == ["calculator", "current_datetime", "web_search"]
@@ -135,3 +161,10 @@ async def test_deeply_nested_expression_is_an_error_not_a_crash(expr: str) -> No
     with pytest.raises(ValueError):
         evaluate(expr)
     assert (await calculator.ainvoke({"expression": expr})).startswith("Error: ")
+
+
+@pytest.mark.parametrize("expr", ["(((10**6)**100)**99)**99", "1e308*10"])
+async def test_oversized_results_are_rejected_fast(expr: str) -> None:
+    start = time.perf_counter()
+    assert (await calculator.ainvoke({"expression": expr})).startswith("Error: ")
+    assert time.perf_counter() - start < 0.5

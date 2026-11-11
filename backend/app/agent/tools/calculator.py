@@ -40,6 +40,17 @@ _CONSTANTS: dict[str, float] = {"pi": math.pi, "e": math.e}
 _MAX_EXPONENT = 1000
 _MAX_BASE_FOR_LARGE_EXPONENT = 1e6
 _LARGE_EXPONENT = 100
+_MAX_RESULT_BITS = 10_000
+
+
+def _check_bounded(value: Number) -> Number:
+    """Reject results that are huge ints or non-finite floats."""
+    if isinstance(value, int):
+        if value.bit_length() > _MAX_RESULT_BITS:
+            raise ValueError("result is too large")
+    elif not math.isfinite(value):
+        raise ValueError("result is too large or undefined")
+    return value
 
 
 def _power(base: Number, exponent: Number) -> Number:
@@ -47,6 +58,13 @@ def _power(base: Number, exponent: Number) -> Number:
         exponent > _LARGE_EXPONENT and abs(base) > _MAX_BASE_FOR_LARGE_EXPONENT
     ):
         raise ValueError("exponent or base is too large")
+    if (
+        isinstance(base, int)
+        and isinstance(exponent, int)
+        and abs(base) > 1
+        and abs(exponent) * base.bit_length() > _MAX_RESULT_BITS + abs(exponent)
+    ):
+        raise ValueError("result is too large")
     result = base**exponent
     if isinstance(result, complex):
         raise ValueError("result is not a real number")
@@ -61,11 +79,11 @@ def _eval(node: ast.AST) -> Number:
     if isinstance(node, ast.BinOp):
         left, right = _eval(node.left), _eval(node.right)
         if isinstance(node.op, ast.Pow):
-            return _power(left, right)
+            return _check_bounded(_power(left, right))
         binary = _BINARY_OPS.get(type(node.op))
         if binary is None:
             raise ValueError("unsupported operator")
-        return binary(left, right)  # type: ignore[no-any-return]
+        return _check_bounded(binary(left, right))
     if isinstance(node, ast.UnaryOp):
         unary = _UNARY_OPS.get(type(node.op))
         if unary is None:

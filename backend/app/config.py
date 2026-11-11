@@ -2,7 +2,10 @@
 
 from functools import lru_cache
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_CONTEXT_HEADROOM_TOKENS = 1500
 
 
 class Settings(BaseSettings):
@@ -20,8 +23,21 @@ class Settings(BaseSettings):
     llm_max_history_tokens: int = 6000
     agent_max_tool_rounds: int = 5
     ollama_base_url: str = "http://localhost:11434"
+    ollama_num_ctx: int = 8192
     web_search_max_results: int = 5
     web_search_timeout_seconds: int = 10
+    web_search_backend: str = "bing"
+
+    @model_validator(mode="after")
+    def _history_budget_fits_context(self) -> "Settings":
+        limit = self.ollama_num_ctx - _CONTEXT_HEADROOM_TOKENS
+        if self.llm_provider == "ollama" and self.llm_max_history_tokens > limit:
+            raise ValueError(
+                f"LLM_MAX_HISTORY_TOKENS ({self.llm_max_history_tokens}) must be at most "
+                f"OLLAMA_NUM_CTX - {_CONTEXT_HEADROOM_TOKENS} ({limit}) so the history, system "
+                "prompt, tool schemas and reply fit in the model's context window"
+            )
+        return self
 
 
 @lru_cache

@@ -15,5 +15,6 @@ def build_tools(settings: Settings) -> list[BaseTool]:
         make_web_search_tool(
             max_results=settings.web_search_max_results,
             timeout=settings.web_search_timeout_seconds,
+            backend=settings.web_search_backend,
         ),
     ]
