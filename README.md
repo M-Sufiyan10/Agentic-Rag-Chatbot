@@ -149,6 +149,7 @@ Supported uploads are `.pdf`, `.docx`, `.txt` and `.md`, up to `MAX_UPLOAD_MB` (
 | `CHUNK_SIZE`           | `1000`             | Characters per chunk                                            |
 | `CHUNK_OVERLAP`        | `150`              | Characters shared between neighbouring chunks                   |
 | `RETRIEVAL_K`          | `4`                | Chunks returned per search (no reranking)                       |
+| `MAX_DOCUMENT_CHUNKS`  | `500`              | Documents with more chunks are marked `failed`, not embedded    |
 
 **Changing the embedding model:** each chunk remembers the model that embedded it, and search only uses chunks from the configured model (it tells the model when some were skipped). After changing `EMBEDDING_MODEL` or `EMBEDDING_DIMENSIONS`, re-embed everything, resizing the vector column if needed:
 

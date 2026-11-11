@@ -181,3 +181,37 @@ def test_unsupported_embedding_provider_raises(test_settings: Settings) -> None:
     settings = test_settings.model_copy(update={"embedding_provider": "nope"})
     with pytest.raises(ValueError, match="nope"):
         build_embeddings(settings)
+
+
+class SpyEmbeddings(DeterministicFakeEmbedding):
+    """Fake embeddings that count document-embedding calls."""
+
+    calls: int = 0
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        self.calls += 1
+        return super().embed_documents(texts)
+
+
+async def test_document_over_chunk_limit_fails_without_embedding(
+    db_session: AsyncSession,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    test_settings: Settings,
+    tmp_path: Path,
+) -> None:
+    settings = test_settings.model_copy(update={"max_document_chunks": 2})
+    storage = LocalFileStorage(tmp_path)
+    text = ("The quick brown fox jumps over the lazy dog. " * 56).encode()  # ~2500 chars
+    doc = await _document(db_session, storage, "long.txt", text)
+    spy = SpyEmbeddings(size=768)
+    await _ingest(doc, sessionmaker, storage, spy, settings)
+
+    doc = await _refreshed(db_session, doc)
+    assert doc.status == "failed"
+    assert doc.error == (
+        "This document is too long to index (3 passages; the limit is 2). "
+        "Split it into smaller files."
+    )
+    assert doc.chunk_count == 0
+    assert await _chunks(db_session, doc.id) == []
+    assert spy.calls == 0

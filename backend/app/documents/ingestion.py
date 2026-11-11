@@ -19,6 +19,10 @@ EMBEDDING_FAILED = (
     "Couldn't process this document: the embedding model may be unavailable. "
     "Delete it and try again."
 )
+TOO_LONG = (
+    "This document is too long to index ({chunks} passages; the limit is {limit}). "
+    "Split it into smaller files."
+)
 INTERRUPTED = "Processing was interrupted by a server restart. Delete and upload it again."
 
 
@@ -61,6 +65,12 @@ async def ingest_document(
             data = await storage.read(key)
             pages = extract_text(filename, data)
             chunks = chunk_pages(pages, settings.chunk_size, settings.chunk_overlap)
+            if len(chunks) > settings.max_document_chunks:
+                # Embedding is the slow part (about a second per chunk on a CPU), so a
+                # huge file would tie up the embedding server for hours.
+                raise ExtractionError(
+                    TOO_LONG.format(chunks=len(chunks), limit=settings.max_document_chunks)
+                )
             vectors = await _embed(embeddings, chunks)
         except ExtractionError as exc:
             await _mark_failed(sessionmaker, document_id, str(exc))

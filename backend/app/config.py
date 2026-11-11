@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     chunk_size: int = 1000
     chunk_overlap: int = 150
     retrieval_k: int = 4
+    max_document_chunks: int = 500
 
     @field_validator("web_search_backend")
     @classmethod
