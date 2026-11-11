@@ -5,8 +5,13 @@ import asyncio
 from ddgs import DDGS
 from langchain_core.tools import BaseTool, tool
 
+# Margin so ddgs's own per-engine timeout fires before this outer deadline.
+_DEADLINE_MARGIN_SECONDS = 5.0
 
-def make_web_search_tool(max_results: int, timeout: float, backend: str = "bing") -> BaseTool:
+
+def make_web_search_tool(
+    max_results: int, timeout: float, backend: str = "duckduckgo,brave,yahoo,startpage"
+) -> BaseTool:
     @tool
     async def web_search(query: str) -> str:
         """Search the web. Use this for recent events, facts that change over time, or anything
@@ -20,7 +25,7 @@ def make_web_search_tool(max_results: int, timeout: float, backend: str = "bing"
                         query, max_results=max_results, backend=backend
                     )
                 ),
-                timeout=timeout,
+                timeout=timeout + _DEADLINE_MARGIN_SECONDS,
             )
         except TimeoutError:
             return (

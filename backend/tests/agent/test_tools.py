@@ -112,7 +112,7 @@ async def test_web_search_formats_results(monkeypatch: pytest.MonkeyPatch) -> No
     assert "Released..." in out
     assert seen["text"]["max_results"] == 3
     assert seen["init"]["timeout"] == 7
-    assert seen["text"]["backend"] == "bing"
+    assert seen["text"]["backend"] == Settings().web_search_backend
     assert seen["query"] == "langgraph"
 
 
@@ -132,9 +132,9 @@ async def test_web_search_failure_is_reported(monkeypatch: pytest.MonkeyPatch) -
 
 async def test_web_search_backend_is_passed_through(monkeypatch: pytest.MonkeyPatch) -> None:
     seen = _fake_ddgs(monkeypatch, results=[])
-    tool = web_search.make_web_search_tool(max_results=5, timeout=10, backend="brave,bing")
+    tool = web_search.make_web_search_tool(max_results=5, timeout=10, backend="brave,yahoo")
     await tool.ainvoke({"query": "x"})
-    assert seen["text"]["backend"] == "brave,bing"
+    assert seen["text"]["backend"] == "brave,yahoo"
 
 
 async def test_web_search_deadline_returns_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -146,6 +146,7 @@ async def test_web_search_deadline_returns_error(monkeypatch: pytest.MonkeyPatch
             return []
 
     monkeypatch.setattr(web_search, "DDGS", SlowDDGS)
+    monkeypatch.setattr(web_search, "_DEADLINE_MARGIN_SECONDS", 0.0)
     tool = web_search.make_web_search_tool(max_results=5, timeout=0.05)
     out = await tool.ainvoke({"query": "x"})
     assert out.startswith("Error: web search timed out")
@@ -168,3 +169,10 @@ async def test_oversized_results_are_rejected_fast(expr: str) -> None:
     start = time.perf_counter()
     assert (await calculator.ainvoke({"expression": expr})).startswith("Error: ")
     assert time.perf_counter() - start < 0.5
+
+
+def test_web_search_backend_validation() -> None:
+    Settings()
+    Settings(web_search_backend="auto")
+    with pytest.raises(ValueError, match="duckduckgo"):
+        Settings(web_search_backend="bing")

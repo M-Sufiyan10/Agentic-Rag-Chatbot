@@ -2,7 +2,8 @@
 
 from functools import lru_cache
 
-from pydantic import model_validator
+from ddgs.engines import ENGINES
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _CONTEXT_HEADROOM_TOKENS = 1500
@@ -26,7 +27,19 @@ class Settings(BaseSettings):
     ollama_num_ctx: int = 8192
     web_search_max_results: int = 5
     web_search_timeout_seconds: int = 10
-    web_search_backend: str = "bing"
+    web_search_backend: str = "duckduckgo,brave,yahoo,startpage"
+
+    @field_validator("web_search_backend")
+    @classmethod
+    def _web_search_backend_is_known(cls, value: str) -> str:
+        available = sorted(ENGINES["text"])
+        unknown = [n.strip() for n in value.split(",") if n.strip() not in {"auto", *available}]
+        if unknown or not value.strip():
+            raise ValueError(
+                f"WEB_SEARCH_BACKEND has unknown engine(s) {unknown or [value]}; "
+                f"use 'auto' or a comma list of: {', '.join(available)}"
+            )
+        return value
 
     @model_validator(mode="after")
     def _history_budget_fits_context(self) -> "Settings":

@@ -124,12 +124,12 @@ These optional variables (all in [`.env.example`](.env.example)) tune the agent:
 | ---------------------------- | ------- | -------------------------------------------------------------------- |
 | `WEB_SEARCH_MAX_RESULTS`     | `5`     | Results the `web_search` tool returns per query                      |
 | `WEB_SEARCH_TIMEOUT_SECONDS` | `10`    | Timeout and overall deadline for one web search                      |
-| `WEB_SEARCH_BACKEND`         | `bing`  | ddgs engine(s), comma list allowed; keyless, but see the caveat below |
+| `WEB_SEARCH_BACKEND`         | see below | ddgs engine(s), comma list allowed; keyless, but see the caveat below |
 | `OLLAMA_NUM_CTX`             | `8192`  | Ollama context window; `LLM_MAX_HISTORY_TOKENS` must be at most this minus 1500 |
 | `AGENT_MAX_TOOL_ROUNDS`      | `5`     | Tool-calling rounds allowed per message before the model must answer |
 | `LLM_MAX_HISTORY_TOKENS`     | `6000`  | Token budget for the history the model sees (the stored one is full) |
 
-**Web search caveat:** `web_search` relies on a third-party, keyless metasearch library (ddgs) scraping public engines, so it can be slow, rate-limited or fail; the agent then tells the user the search failed. Some engines return nothing from some networks, so try another `WEB_SEARCH_BACKEND` if results are empty.
+**Web search caveat:** `web_search` relies on a third-party, keyless metasearch library (ddgs) scraping public engines, so it can be slow, rate-limited or fail; the agent then tells the user the search failed. Some engines return nothing from some networks, so try another `WEB_SEARCH_BACKEND` (default `duckduckgo,brave,yahoo,startpage`; unknown engine names are rejected at startup) if results are empty.
 
 ## Running the tests
 
