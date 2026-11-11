@@ -118,6 +118,11 @@ def test_system_prompt_mentions_tools() -> None:
     assert "calculator" in SYSTEM_PROMPT
 
 
+def test_system_prompt_mentions_mcp_tools() -> None:
+    for name in ("get_weather", "convert_units", "convert_time", "fetch"):
+        assert name in SYSTEM_PROMPT
+
+
 async def test_documents_note_is_in_the_system_prompt_only() -> None:
     model = ScriptedChatModel(
         replies=[tool_call_reply("echo", {"text": "a"}, "c1"), AIMessage("final")]

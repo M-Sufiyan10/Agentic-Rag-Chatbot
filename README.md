@@ -162,6 +162,40 @@ It exits non-zero if any document fails; fix the cause and run it again.
 
 **Will the model search?** Each turn the server tells the model which documents the user has (their ready filenames, at most 20), so it knows there is something to search. In live runs with the default 4B model this made "What is the codename of the Zephyr-9 project according to my documents?" call `search_documents` and answer with a citation 3 times out of 3. A question that doesn't mention documents ("What's the Zephyr-9 project's codename?") still never did (0 of 9 live runs across two wordings of the note, including "What's the budget of the Zephyr-9 project?"), so mention your documents when you ask. The measured runs are in [note 3, sections 8 and 9](docs/learning/03-documents-rag.md#8-telling-the-model-what-you-have).
 
+## MCP
+
+The agent can load tools from [MCP](https://modelcontextprotocol.io) servers listed in a JSON config file, next to its built-in tools. Two are configured by default: `utils` (this repo's `mcp-utils` server: `get_weather`, `convert_units`, `convert_time`; keyless, weather from Open-Meteo) and `fetch` (the pinned third-party `mcp-server-fetch`, run with `uvx`, tool `fetch`; it refuses private, loopback and link-local addresses). The app works with MCP down: a server that can't be reached at startup is skipped with a warning, and a call to a server that has died returns an error string to the model.
+
+Run `mcp-utils` (listens on `127.0.0.1:8100`, path `/mcp`) in either of two ways:
+
+```bash
+cd mcp-utils && uv run python -m mcp_utils   # locally
+docker compose up -d mcp-utils               # or in Docker
+```
+
+The config file is `backend/mcp_servers.json` (`MCP_CONFIG_PATH`, resolved relative to `backend/`). Each key is a server name. Supported transports are `streamable_http` (needs `url`) and `stdio` (needs `command`, optional `args`). A missing file means no MCP servers; invalid JSON or an unknown transport fails at startup.
+
+```json
+{
+  "utils": { "transport": "streamable_http", "url": "http://localhost:8100/mcp" },
+  "fetch": {
+    "transport": "stdio",
+    "command": "uvx",
+    "args": ["--from", "mcp-server-fetch==2026.10.24", "mcp-server-fetch"]
+  }
+}
+```
+
+| Variable                      | Default            | Meaning                                                            |
+| ----------------------------- | ------------------ | ------------------------------------------------------------------ |
+| `MCP_CONFIG_PATH`             | `mcp_servers.json` | Server config file                                                 |
+| `MCP_TOOL_TIMEOUT_SECONDS`    | `30`               | Deadline for one MCP tool call                                     |
+| `MCP_STARTUP_TIMEOUT_SECONDS` | `20`               | Deadline for loading one server's tools at startup                 |
+| `MCP_UTILS_HOST`              | `127.0.0.1`        | `mcp-utils` bind address (the Docker image sets `0.0.0.0`)         |
+| `MCP_UTILS_PORT`              | `8100`             | `mcp-utils` port                                                   |
+
+A tool whose name matches a built-in tool or an already-loaded MCP tool is skipped with a warning; built-ins win. `GET /api/health` reports each server: `{"status": "ok", "mcp": {"utils": "ok", "fetch": "unavailable"}}`.
+
 ## Running the tests
 
 Backend tests need Postgres (the `docker compose` one above is fine). They read `TEST_DATABASE_URL`, which defaults to `postgresql+asyncpg://chatbot:chatbot@localhost:5433/chatbot_test`. No test calls a real LLM.
