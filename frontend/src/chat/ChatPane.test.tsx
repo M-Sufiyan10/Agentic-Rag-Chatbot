@@ -8,12 +8,32 @@ import ChatPane from './ChatPane'
 
 type Frame = { event: string; data: unknown }
 
-/** An SSE response that emits each frame after a short pause, like a real model. */
-function sseResponse(frames: Frame[], pauseMs = 30): HttpResponse<ReadableStream<Uint8Array>> {
+/** Holds a stream after its first `afterFrames` frames until the test calls `release()`. */
+type Gate = { afterFrames: number; opened: Promise<void>; release: () => void }
+
+function makeGate(afterFrames: number): Gate {
+  let release = () => {}
+  const opened = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  return { afterFrames, opened, release }
+}
+
+/**
+ * An SSE response that emits each frame after a short pause, like a real model.
+ * With a gate, the stream pauses after `gate.afterFrames` frames until released, so a
+ * test can assert a transient state (such as a running tool chip) deterministically.
+ */
+function sseResponse(
+  frames: Frame[],
+  pauseMs = 30,
+  gate?: Gate,
+): HttpResponse<ReadableStream<Uint8Array>> {
   const encoder = new TextEncoder()
   const body = new ReadableStream<Uint8Array>({
     async start(controller) {
-      for (const { event, data } of frames) {
+      for (const [index, { event, data }] of frames.entries()) {
+        if (gate && index === gate.afterFrames) await gate.opened
         await new Promise((resolve) => setTimeout(resolve, pauseMs))
         controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`))
       }
@@ -183,6 +203,7 @@ describe('ChatPane', () => {
   })
 
   it('shows a running tool chip, then marks it done, then streams the answer', async () => {
+    const gate = makeGate(1)
     server.use(
       http.get('*/api/conversations/c1/messages', () => HttpResponse.json([])),
       http.post('*/api/conversations/c1/messages', () =>
@@ -200,6 +221,7 @@ describe('ChatPane', () => {
             { event: 'done', data: { content: 'Answer' } },
           ],
           150,
+          gate,
         ),
       ),
     )
@@ -207,6 +229,7 @@ describe('ChatPane', () => {
     await typeAndSend('hi')
 
     expect(await screen.findByText('Searching the web…')).toBeVisible()
+    gate.release()
     expect(await screen.findByText('Searched the web')).toBeVisible()
     expect(await screen.findByText('Answer')).toBeVisible()
   })
@@ -247,6 +270,7 @@ describe('ChatPane', () => {
   ]
 
   it('shows a documents chip and then Sources for a cited answer', async () => {
+    const gate = makeGate(1)
     let history: unknown[] = []
     server.use(
       http.get('*/api/conversations/c1/messages', () => HttpResponse.json(history)),
@@ -264,6 +288,7 @@ describe('ChatPane', () => {
             { event: 'done', data: { content: 'Answer' } },
           ],
           150,
+          gate,
         )
       }),
     )
@@ -271,6 +296,7 @@ describe('ChatPane', () => {
     await typeAndSend('q')
 
     expect(await screen.findByText('Searching your documents…')).toBeVisible()
+    gate.release()
     expect(await screen.findByText('Sources')).toBeVisible()
     expect(screen.getByText('handbook.pdf')).toBeVisible()
     // After done, the saved transcript still shows them.
