@@ -3,6 +3,7 @@
 import uuid
 
 from langchain_core.embeddings import Embeddings
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.models import User
@@ -85,8 +86,8 @@ async def test_search_orders_by_distance_and_limits_k(
     db_session: AsyncSession, embeddings: Embeddings
 ) -> None:
     alice = await _user(db_session)
-    for text in ["alpha", "beta", "gamma"]:
-        await _document_with_chunk(db_session, embeddings, alice, text)
+    for word in ["alpha", "beta", "gamma"]:
+        await _document_with_chunk(db_session, embeddings, alice, word)
 
     results = await search_chunks(
         db_session,
@@ -162,3 +163,52 @@ async def test_document_overview_without_documents(db_session: AsyncSession) -> 
     overview = await document_overview(db_session, user_id=alice.id, limit=20)
 
     assert overview == DocumentOverview(ready=[], ready_total=0, processing=0)
+
+
+async def test_search_finds_k_own_chunks_among_many_others_through_the_index(
+    db_session: AsyncSession, embeddings: Embeddings
+) -> None:
+    # pgvector's HNSW scan returns hnsw.ef_search (40) nearest candidates from the
+    # whole table and only then applies WHERE user_id = ...; without an iterative
+    # scan a user with few chunks among many gets fewer than k results, or none.
+    alice, bob = await _user(db_session), await _user(db_session)
+    for word in ["alpha", "beta", "gamma", "delta"]:
+        await _document_with_chunk(db_session, embeddings, alice, word)
+    bob_doc = Document(
+        user_id=bob.id,
+        filename="big.txt",
+        content_type="text/plain",
+        size_bytes=1,
+        storage_key=f"{bob.id}/{uuid.uuid4()}.txt",
+        status="ready",
+    )
+    db_session.add(bob_doc)
+    await db_session.flush()
+    db_session.add_all(
+        DocumentChunk(
+            document_id=bob_doc.id,
+            user_id=bob.id,
+            chunk_index=i,
+            content=f"bob {i}",
+            embedding=embeddings.embed_query(f"bob {i}"),
+            embedding_model=MODEL,
+        )
+        for i in range(1500)
+    )
+    await db_session.commit()
+    # Make the planner use the HNSW index, as it does once the table is large (on a
+    # table this small it would otherwise pick the user_id btree and sort).
+    for setting in ["enable_seqscan", "enable_bitmapscan", "enable_sort"]:
+        await db_session.execute(text(f"SET LOCAL {setting} = off"))
+
+    results = await search_chunks(
+        db_session,
+        user_id=alice.id,
+        query_vector=embeddings.embed_query("an unrelated question"),
+        embedding_model=MODEL,
+        k=4,
+    )
+
+    assert sorted(c.content for c in results) == ["alpha", "beta", "delta", "gamma"]
+    distances = [c.distance for c in results]
+    assert distances == sorted(distances)

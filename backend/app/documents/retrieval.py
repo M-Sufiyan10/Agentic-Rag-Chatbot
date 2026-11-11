@@ -8,7 +8,7 @@ another (the project's first anti-goal). ``user_id`` must come from the server
 import uuid
 from dataclasses import dataclass
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.documents.models import Document, DocumentChunk
@@ -35,9 +35,19 @@ async def search_chunks(
 
     Only chunks embedded with ``embedding_model`` (vectors from another model
     are not comparable) and belonging to ``ready`` documents are searched.
+
+    The HNSW index scan returns ``hnsw.ef_search`` (default 40) candidates from
+    the *whole* table, and the ``user_id`` filter is applied afterwards, so a
+    user with few chunks among many other users' would get fewer than ``k``
+    results, or none. pgvector's iterative scan keeps scanning until ``k`` rows
+    pass the filter. Its ``relaxed_order`` mode may return them slightly out of
+    order, so the outer query sorts them again (``+ 0`` stops PostgreSQL < 17
+    from assuming the materialized CTE is already sorted). ``SET LOCAL`` lasts
+    until the end of the current transaction.
     """
+    await session.execute(text("SET LOCAL hnsw.iterative_scan = relaxed_order"))
     distance = DocumentChunk.embedding.cosine_distance(query_vector).label("distance")
-    rows = await session.execute(
+    nearest = (
         select(
             DocumentChunk.document_id,
             Document.filename,
@@ -54,7 +64,10 @@ async def search_chunks(
         )
         .order_by(distance)
         .limit(k)
+        .cte("nearest")
+        .prefix_with("MATERIALIZED")
     )
+    rows = await session.execute(select(nearest).order_by(nearest.c.distance + 0))
     return [
         RetrievedChunk(
             document_id=row.document_id,
