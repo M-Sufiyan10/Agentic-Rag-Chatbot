@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     llm_model: str = "qwen3:4b-instruct-2507-q4_K_M"
     llm_temperature: float = 0.2
     ollama_base_url: str = "http://localhost:11434"
+    web_search_max_results: int = 5
+    web_search_timeout_seconds: int = 10
 
 
 @lru_cache
