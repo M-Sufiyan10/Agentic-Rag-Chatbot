@@ -1,0 +1,11 @@
+{
+  "utils": {
+    "transport": "streamable_http",
+    "url": "http://localhost:8100/mcp"
+  },
+  "fetch": {
+    "transport": "stdio",
+    "command": "uvx",
+    "args": ["--from", "mcp-server-fetch==2026.10.24", "mcp-server-fetch"]
+  }
+}

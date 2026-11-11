@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     chunk_overlap: int = 150
     retrieval_k: int = 4
     max_document_chunks: int = 500
+    mcp_config_path: str = "mcp_servers.json"
+    mcp_tool_timeout_seconds: float = 30
+    mcp_startup_timeout_seconds: float = 20
 
     @field_validator("web_search_backend")
     @classmethod
