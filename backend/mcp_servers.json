@@ -6,6 +6,9 @@
   "fetch": {
     "transport": "stdio",
     "command": "uvx",
-    "args": ["--from", "mcp-server-fetch==2026.10.24", "mcp-server-fetch"]
+    "args": ["--from", "mcp-server-fetch==2026.10.24", "mcp-server-fetch"],
+    "tool_descriptions": {
+      "fetch": "Read a web page: fetch a URL from the internet and return its main text as markdown."
+    }
   }
 }

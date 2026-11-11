@@ -57,6 +57,12 @@ def test_committed_config_has_utils_and_pinned_fetch() -> None:
     assert "--allow-private-ips" not in args
 
 
+def test_committed_config_replaces_the_upstream_fetch_description() -> None:
+    description = load_mcp_config(COMMITTED_CONFIG)["fetch"]["tool_descriptions"]["fetch"]
+    assert "Read a web page" in description
+    assert "did not have internet access" not in description
+
+
 def test_relative_config_path_resolves_against_backend_dir() -> None:
     assert load_mcp_config(Path("mcp_servers.json")) == load_mcp_config(COMMITTED_CONFIG)
 
@@ -74,6 +80,8 @@ def test_missing_config_file_means_no_servers(tmp_path: Path) -> None:
         json.dumps({"x": {"transport": "stdio", "command": "x", "args": [1]}}),
         json.dumps({"x": {"transport": "streamable_http"}}),
         json.dumps(["not", "an", "object"]),
+        json.dumps({"x": {"transport": "stdio", "command": "x", "tool_descriptions": "x"}}),
+        json.dumps({"x": {"transport": "stdio", "command": "x", "tool_descriptions": {"t": 1}}}),
     ],
 )
 def test_invalid_config_is_a_clear_error(tmp_path: Path, content: str) -> None:
@@ -175,6 +183,26 @@ async def test_guarded_tool_keeps_name_description_and_schema() -> None:
     shout = tools["shout"]
     assert shout.description == "Return the text in upper case."
     assert set(shout.args) == {"text"}
+
+
+async def test_tool_descriptions_override_the_server_description() -> None:
+    echo = {**ECHO, "tool_descriptions": {"shout": "Shout the text back."}}
+    tools, statuses = await _load({"echo": echo})
+    # The override isn't forwarded as a connection key, or the server would fail to start.
+    assert statuses == {"echo": "ok"}
+    assert tools["shout"].description == "Shout the text back."
+    assert tools["boom"].description != "Shout the text back."
+    assert await tools["shout"].ainvoke({"text": "hi"}) == "HI"
+    assert echo["tool_descriptions"] == {"shout": "Shout the text back."}  # input not mutated
+
+
+async def test_guard_uses_a_given_description() -> None:
+    tools, _ = await _load({"echo": ECHO})
+    guarded = agent_mcp.guard_mcp_tool(
+        tools["shout"], server="echo", timeout=5, description="Custom."
+    )
+    assert guarded.description == "Custom."
+    assert guarded.name == "shout"
 
 
 # --- graph and app ---

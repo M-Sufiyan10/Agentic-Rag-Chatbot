@@ -1,7 +1,9 @@
 """Tools from MCP servers listed in a JSON config, isolated so a broken server can't break the app.
 
 Each server is loaded on its own with a startup deadline; one that fails or is
-too slow is skipped with a WARNING. Every kept tool is wrapped by
+too slow is skipped with a WARNING. A server entry may carry
+``"tool_descriptions": {tool: text}`` to replace a tool's upstream description
+(it is ours, not a connection key). Every kept tool is wrapped by
 ``guard_mcp_tool``, so a call that hangs or fails returns an ``"Error: …"``
 string instead of raising. Tool calls stay stateless: the adapter opens a fresh
 session for each call.
@@ -29,7 +31,8 @@ def load_mcp_config(path: Path) -> dict[str, dict[str, Any]]:
 
     Relative paths resolve against the backend directory, not the CWD. Raises
     ``ValueError`` naming the file when it isn't valid JSON or an entry has an
-    unknown transport, a missing required key or non-string args.
+    unknown transport, a missing required key, non-string args or
+    ``tool_descriptions`` that isn't an object of strings.
     """
     if not path.is_absolute():
         path = BACKEND_DIR / path
@@ -64,6 +67,11 @@ def load_mcp_config(path: Path) -> dict[str, dict[str, Any]]:
             args = entry.setdefault("args", [])
             if not isinstance(args, list) or not all(isinstance(a, str) for a in args):
                 raise invalid(f"server {name!r} 'args' must be a list of strings")
+        descriptions = entry.get("tool_descriptions", {})
+        if not isinstance(descriptions, dict) or not all(
+            isinstance(text, str) for text in descriptions.values()
+        ):
+            raise invalid(f"server {name!r} 'tool_descriptions' must map tool names to strings")
         config[name] = entry
     return config
 
@@ -82,7 +90,9 @@ async def load_mcp_tools(
     tools: list[BaseTool] = []
     statuses: dict[str, str] = {}
     taken = set(reserved_names)
-    for server, connection in connections.items():
+    for server, entry in connections.items():
+        connection = dict(entry)
+        descriptions: dict[str, str] = connection.pop("tool_descriptions", {})
         client = MultiServerMCPClient({server: connection})  # type: ignore[dict-item]
         try:
             server_tools = await asyncio.wait_for(client.get_tools(), startup_timeout)
@@ -100,7 +110,14 @@ async def load_mcp_tools(
                 )
                 continue
             taken.add(tool.name)
-            tools.append(guard_mcp_tool(tool, server=server, timeout=tool_timeout))
+            tools.append(
+                guard_mcp_tool(
+                    tool,
+                    server=server,
+                    timeout=tool_timeout,
+                    description=descriptions.get(tool.name),
+                )
+            )
     return tools, statuses
 
 
@@ -120,8 +137,12 @@ def _content_text(content: Any) -> Any:
     return content
 
 
-def guard_mcp_tool(tool: BaseTool, *, server: str, timeout: float) -> BaseTool:
+def guard_mcp_tool(
+    tool: BaseTool, *, server: str, timeout: float, description: str | None = None
+) -> BaseTool:
     """Wrap ``tool`` so a call that hangs or fails returns an ``"Error: …"`` string.
+
+    ``description`` replaces the tool's own description when given.
 
     A tool error reported by the server (an MCP ``isError`` result) is already
     turned into content by the adapter and passes through as its text.
@@ -140,7 +161,7 @@ def guard_mcp_tool(tool: BaseTool, *, server: str, timeout: float) -> BaseTool:
 
     return StructuredTool(
         name=tool.name,
-        description=tool.description,
+        description=tool.description if description is None else description,
         args_schema=tool.args_schema,
         coroutine=call,
     )
