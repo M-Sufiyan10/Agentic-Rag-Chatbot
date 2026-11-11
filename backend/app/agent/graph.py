@@ -12,7 +12,7 @@ LangGraph concepts, in the order they appear below:
   `ToolNode`: it runs every tool call on the model's last message and appends
   one `ToolMessage` per call. Tool errors (unknown tool, bad arguments) become
   error `ToolMessage`s so the model can see them and recover.
-* **Edges** define control flow. `tools_condition` routes `agent -> tools` when
+* **Edges** define control flow. `_route_after_agent` routes `agent -> tools` when
   the reply contains tool calls and `agent -> END` otherwise; `tools -> agent`
   closes the loop. Without any tools the graph is just `START -> agent -> END`.
 * **Checkpointer** saves the state after each step, keyed by the `thread_id`
@@ -50,7 +50,7 @@ from langchain_core.tools import BaseTool
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.graph.state import CompiledStateGraph
-from langgraph.prebuilt import ToolNode, tools_condition
+from langgraph.prebuilt import ToolNode
 
 from app.agent.prompts import FINAL_ROUND_INSTRUCTION, SYSTEM_PROMPT
 
@@ -64,6 +64,20 @@ def _tool_rounds_this_turn(messages: Sequence[BaseMessage]) -> int:
         if isinstance(message, AIMessage) and message.tool_calls:
             rounds += 1
     return rounds
+
+
+def _route_after_agent(state: MessagesState) -> str:
+    """Go to `tools` if the last message requests tools, else end the run.
+
+    Like the prebuilt `tools_condition`, except that an empty history routes to
+    END instead of raising: rolling back a thread's first turn (see
+    `app.chat.streaming`) removes every message via `update_state(as_node="agent")`,
+    which re-evaluates this edge on the emptied state.
+    """
+    messages = state["messages"]
+    if messages and isinstance(messages[-1], AIMessage) and messages[-1].tool_calls:
+        return "tools"
+    return END
 
 
 def _trim_history(messages: Sequence[BaseMessage], max_tokens: int) -> list[BaseMessage]:
@@ -109,7 +123,7 @@ def build_graph(
     builder.add_edge(START, "agent")
     if tools:
         builder.add_node("tools", ToolNode(tools))
-        builder.add_conditional_edges("agent", tools_condition)
+        builder.add_conditional_edges("agent", _route_after_agent, ["tools", END])
         builder.add_edge("tools", "agent")
     else:
         builder.add_edge("agent", END)

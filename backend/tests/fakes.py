@@ -11,6 +11,7 @@ from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 from langchain_core.runnables import Runnable
 from langchain_core.tools import BaseTool, tool
+from pydantic import SkipValidation
 
 
 @tool
@@ -33,7 +34,8 @@ class ScriptedChatModel(BaseChatModel):
     cursor and recorders with the original.
     """
 
-    replies: list[AIMessage | Exception]
+    # Not validated: pydantic would try to coerce an Exception entry into an AIMessage and crash.
+    replies: SkipValidation[list[AIMessage | Exception]]
     calls: list[list[BaseMessage]] = []
     call_tools: list[list[str] | None] = []
     cursor: list[int] = [0]
