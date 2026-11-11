@@ -23,7 +23,7 @@ _Screenshots and a demo GIF will be added in Milestone 7._
 - **React UI:** login/register, conversation sidebar, and a chat pane with live streaming and Markdown rendering.
 - **Agent tools (M2):** the agent loops between the model and tools until it can answer. It has a safe `calculator` (an AST evaluator, never `eval`), `current_datetime`, and `web_search` (keyless metasearch via ddgs; see the caveat under Agent settings). The UI shows a live chip per tool call ("Searching the web...") and keeps them on the saved message. A max-rounds guard stops a looping model, long histories are trimmed for the model, a failed or abandoned reply is rolled back so the thread stays valid, and Markdown images in replies are shown as links instead of being fetched.
 - **Documents and RAG (M3):** upload PDF, DOCX, TXT or MD files in a Documents panel. They are ingested in the background (`processing`, then `ready` or `failed` with a reason), chunked, embedded with `nomic-embed-text` and stored in pgvector. The agent's `search_documents` tool searches only the signed-in user's documents (the user id comes from the server, never from the model), and answers show expandable source citations (file, chunk and snippet) that also survive a reload. Another user's document returns `404`.
-- **MCP tools (M4):** the agent also loads tools from MCP servers listed in `backend/mcp_servers.json`: a custom `mcp-utils` server (`get_weather`, `convert_units`, `convert_time`; its own service with a Dockerfile, compose entry and CI job) and the third-party `fetch` server for reading web pages (it refuses private addresses, so the cloud metadata endpoint is out of reach). A server that is down at startup is skipped and shown as `unavailable` in `/api/health`; the app keeps working. See the [MCP section](#mcp).
+- **MCP tools (M4):** the agent also loads tools from MCP servers listed in `backend/mcp_servers.json`: a custom `mcp-utils` server (`get_weather`, `convert_units`, `convert_time`; its own service with a Dockerfile, compose entry and CI job) and the third-party `fetch` server for reading web pages (it refuses URLs whose host resolves to a private, loopback or link-local address, checked on every request and redirect). `fetch` is unreliable with the default 4B model: in the latest live check it was called for 1 of 4 public URLs, and otherwise the model answered that it cannot access websites. A server that is down at startup is skipped and shown as `unavailable` in `/api/health`; the app keeps working. See the [MCP section](#mcp).
 - **Quality gates:** pytest (the LLM is always faked in unit tests), ruff, mypy strict, Vitest, oxlint and `tsc`, all run in GitHub Actions.
 
 ## Roadmap
@@ -169,7 +169,7 @@ It exits non-zero if any document fails; fix the cause and run it again.
 
 ## MCP
 
-The agent can load tools from [MCP](https://modelcontextprotocol.io) servers listed in a JSON config file, next to its built-in tools. Two are configured by default: `utils` (this repo's `mcp-utils` server: `get_weather`, `convert_units`, `convert_time`; keyless, weather from Open-Meteo) and `fetch` (the pinned third-party `mcp-server-fetch`, run with `uvx`, tool `fetch`; it refuses private, loopback and link-local addresses). The app works with MCP down: a server that can't be reached at startup is skipped with a warning, and a call to a server that has died returns an error string to the model.
+The agent can load tools from [MCP](https://modelcontextprotocol.io) servers listed in a JSON config file, next to its built-in tools. Two are configured by default: `utils` (this repo's `mcp-utils` server: `get_weather`, `convert_units`, `convert_time`; keyless, weather from Open-Meteo) and `fetch` (the pinned third-party `mcp-server-fetch`, run with `uvx`, tool `fetch`; it refuses URLs whose host resolves to a private, loopback or link-local address, checked on every request and redirect). The default 4B model often doesn't call `fetch`: in the latest live check it read 1 of 4 public URLs and claimed it couldn't access the other three (details in [note 4](docs/learning/04-mcp.md#7-live-results)). The app works with MCP down: a server that can't be reached at startup is skipped with a warning, and a call to a server that has died returns an error string to the model.
 
 Run `mcp-utils` (listens on `127.0.0.1:8100`, path `/mcp`) in either of two ways:
 
@@ -178,7 +178,9 @@ cd mcp-utils && uv run python -m mcp_utils   # locally
 docker compose up -d mcp-utils               # or in Docker
 ```
 
-The config file is `backend/mcp_servers.json` (`MCP_CONFIG_PATH`, resolved relative to `backend/`). Each key is a server name. Supported transports are `streamable_http` (needs `url`) and `stdio` (needs `command`, optional `args`). A missing file means no MCP servers; invalid JSON or an unknown transport fails at startup.
+Inside its container the server binds `0.0.0.0`, which turns off the SDK's DNS-rebinding check, so compose publishes the port on `127.0.0.1:8100` only and the unauthenticated server is not reachable from the LAN.
+
+The config file is `backend/mcp_servers.json` (`MCP_CONFIG_PATH`, resolved relative to `backend/`). Each key is a server name. Supported transports are `streamable_http` (needs `url`) and `stdio` (needs `command`, optional `args`). An optional `tool_descriptions` object replaces a tool's upstream description; it is used for `fetch`, whose own description tells the model it "did not have internet access" and was "advised to refuse". A missing file means no MCP servers; invalid JSON or an unknown transport fails at startup.
 
 ```json
 {
@@ -189,7 +191,10 @@ The config file is `backend/mcp_servers.json` (`MCP_CONFIG_PATH`, resolved relat
   "fetch": {
     "transport": "stdio",
     "command": "uvx",
-    "args": ["--from", "mcp-server-fetch==2026.10.24", "mcp-server-fetch"]
+    "args": ["--from", "mcp-server-fetch==2026.10.24", "mcp-server-fetch"],
+    "tool_descriptions": {
+      "fetch": "Read a web page: fetch a URL from the internet and return its main text as markdown."
+    }
   }
 }
 ```
