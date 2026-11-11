@@ -112,6 +112,7 @@ async def app(
     chat_model: BaseChatModel,
     checkpointer: InMemorySaver,
     tools: list[BaseTool],
+    embeddings: Embeddings,
 ) -> AsyncIterator[FastAPI]:
     """The app with its lifespan running, wired to the fake model and checkpointer."""
     application = create_app(
