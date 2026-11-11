@@ -128,3 +128,10 @@ async def test_web_search_failure_is_reported(monkeypatch: pytest.MonkeyPatch) -
 def test_build_tools_names(test_settings: Settings) -> None:
     names = [t.name for t in build_tools(test_settings)]
     assert names == ["calculator", "current_datetime", "web_search"]
+
+
+@pytest.mark.parametrize("expr", ["-" * 5000 + "1", "1+" * 5000 + "1"])
+async def test_deeply_nested_expression_is_an_error_not_a_crash(expr: str) -> None:
+    with pytest.raises(ValueError):
+        evaluate(expr)
+    assert (await calculator.ainvoke({"expression": expr})).startswith("Error: ")

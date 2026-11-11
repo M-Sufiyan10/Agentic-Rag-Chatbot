@@ -95,6 +95,8 @@ def evaluate(expression: str) -> Number:
         raise ValueError("result is too large") from None
     except SyntaxError:
         raise ValueError(f"invalid expression '{expression}'") from None
+    except (RecursionError, MemoryError):
+        raise ValueError("expression is too deeply nested") from None
     except TypeError as exc:
         raise ValueError(f"invalid arguments ({exc})") from None
 
