@@ -17,13 +17,14 @@
  *      the user still sees what they sent (and can retry it).
  *
  * `tool_start` / `tool_end` events track tool activity for the live chips.
- * Events this milestone doesn't know about (later: `citations`) are ignored, so the backend can add them without breaking us.
+ * `citations` (sent once, just before `done`) holds the document sources for the reply. Unknown events are ignored, so the backend can add them without breaking us.
  */
 import { useQueryClient } from '@tanstack/react-query'
 import { useCallback, useRef, useState } from 'react'
 import { apiFetch } from '@/api/client'
 import { parseSSE } from '@/api/sse'
 import { conversationsKey, messagesKey } from './api'
+import type { Citation } from './api'
 
 export type ChatStreamStatus = 'idle' | 'waiting' | 'streaming' | 'error'
 
@@ -37,6 +38,8 @@ export type ToolActivity = {
 
 export type ChatStream = {
   streamingText: string
+  /** Document sources for the current reply (arrive just before `done`). */
+  citations: Citation[]
   /** Tools the assistant has used (or is using) for the current reply. */
   tools: ToolActivity[]
   /** The message being sent, shown until the saved transcript includes it. */
@@ -54,6 +57,7 @@ export function useChatStream(conversationId: string): ChatStream {
   const queryClient = useQueryClient()
   const [streamingText, setStreamingText] = useState('')
   const [tools, setTools] = useState<ToolActivity[]>([])
+  const [citations, setCitations] = useState<Citation[]>([])
   const [pendingMessage, setPendingMessage] = useState<string | null>(null)
   const [status, setStatus] = useState<ChatStreamStatus>('idle')
   const [error, setError] = useState<string | null>(null)
@@ -67,12 +71,14 @@ export function useChatStream(conversationId: string): ChatStream {
       setError(null)
       setStreamingText('')
       setTools([])
+      setCitations([])
       setPendingMessage(content)
       setStatus('waiting')
 
       const fail = (message: string) => {
         setStreamingText('')
         setTools([])
+        setCitations([])
         setError(message)
         setStatus('error')
       }
@@ -122,6 +128,9 @@ export function useChatStream(conversationId: string): ChatStream {
             setTools((prev) =>
               prev.map((t) => (t.id === d.id ? { ...t, output, status: 'done' } : t)),
             )
+          } else if (event === 'citations') {
+            const items = (data as { items?: unknown } | null)?.items
+            if (Array.isArray(items) && items.every(isCitation)) setCitations(items)
           } else if (event === 'done') {
             // Keep showing the final text until the saved transcript arrives,
             // so the reply never blinks out between the two.
@@ -135,6 +144,7 @@ export function useChatStream(conversationId: string): ChatStream {
             ])
             setStreamingText('')
             setTools([])
+            setCitations([])
             setPendingMessage(null)
             setStatus('idle')
             return
@@ -153,7 +163,19 @@ export function useChatStream(conversationId: string): ChatStream {
     [conversationId, queryClient],
   )
 
-  return { streamingText, tools, pendingMessage, status, error, send }
+  return { streamingText, citations, tools, pendingMessage, status, error, send }
+}
+
+function isCitation(x: unknown): x is Citation {
+  const c = x as Partial<Record<keyof Citation, unknown>> | null
+  return (
+    typeof c === 'object' &&
+    c !== null &&
+    typeof c.document_id === 'string' &&
+    typeof c.filename === 'string' &&
+    typeof c.chunk_index === 'number' &&
+    typeof c.snippet === 'string'
+  )
 }
 
 async function errorDetail(res: Response): Promise<string> {

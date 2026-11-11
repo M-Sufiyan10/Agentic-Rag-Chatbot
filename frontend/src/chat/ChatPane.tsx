@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { useMessages } from './api'
 import MessageBubble, { AssistantAvatar } from './MessageBubble'
+import Citations from './Citations'
 import ToolChips from './ToolChips'
 import { useChatStream } from './useChatStream'
 
@@ -20,7 +21,7 @@ type Props = {
 /** The transcript and composer for one conversation. */
 export default function ChatPane({ conversationId, initialMessage, onInitialMessageSent }: Props) {
   const messages = useMessages(conversationId)
-  const { streamingText, tools, pendingMessage, status, error, send } =
+  const { streamingText, citations, tools, pendingMessage, status, error, send } =
     useChatStream(conversationId)
   const [lastSent, setLastSent] = useState<string | null>(null)
   const busy = status === 'waiting' || status === 'streaming'
@@ -81,6 +82,7 @@ export default function ChatPane({ conversationId, initialMessage, onInitialMess
             {history.map((m, i) => (
               <MessageBubble key={i} role={m.role} content={m.content}>
                 {m.tools?.length ? <ToolChips names={m.tools} /> : null}
+                {m.citations?.length ? <Citations items={m.citations} /> : null}
               </MessageBubble>
             ))}
             {showPending && <MessageBubble role="user" content={pendingMessage} />}
@@ -91,7 +93,9 @@ export default function ChatPane({ conversationId, initialMessage, onInitialMess
             )}
             {busy && !streamingText && !toolRunning && <ThinkingIndicator />}
             {status === 'streaming' && streamingText && (
-              <MessageBubble role="assistant" content={streamingText} streaming />
+              <MessageBubble role="assistant" content={streamingText} streaming>
+                <Citations items={citations} />
+              </MessageBubble>
             )}
             {status === 'error' && error && (
               <ErrorNotice

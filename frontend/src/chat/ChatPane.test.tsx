@@ -51,11 +51,14 @@ describe('ChatPane', () => {
           { role: 'user', content: 'Hi there' },
           { role: 'assistant', content: 'Hello' },
         ]
-        return sseResponse([
-          { event: 'token', data: { text: 'Hel' } },
-          { event: 'token', data: { text: 'lo' } },
-          { event: 'done', data: { content: 'Hello' } },
-        ])
+        return sseResponse(
+          [
+            { event: 'token', data: { text: 'Hel' } },
+            { event: 'token', data: { text: 'lo' } },
+            { event: 'done', data: { content: 'Hello' } },
+          ],
+          150,
+        )
       }),
     )
     renderPane()
@@ -237,5 +240,78 @@ describe('ChatPane', () => {
 
     expect(await screen.findByText('Fine')).toBeVisible()
     expect(screen.queryByText(/Calling/)).toBeNull()
+  })
+
+  const sources = [
+    { document_id: 'd1', filename: 'handbook.pdf', chunk_index: 2, snippet: 'Vacation policy' },
+  ]
+
+  it('shows a documents chip and then Sources for a cited answer', async () => {
+    let history: unknown[] = []
+    server.use(
+      http.get('*/api/conversations/c1/messages', () => HttpResponse.json(history)),
+      http.post('*/api/conversations/c1/messages', () => {
+        history = [
+          { role: 'user', content: 'q', tools: [], citations: [] },
+          { role: 'assistant', content: 'Answer', tools: ['search_documents'], citations: sources },
+        ]
+        return sseResponse(
+          [
+            { event: 'tool_start', data: { id: 't1', name: 'search_documents', input: {} } },
+            { event: 'tool_end', data: { id: 't1', name: 'search_documents', output: 'r' } },
+            { event: 'token', data: { text: 'Answer' } },
+            { event: 'citations', data: { items: sources } },
+            { event: 'done', data: { content: 'Answer' } },
+          ],
+          150,
+        )
+      }),
+    )
+    renderPane()
+    await typeAndSend('q')
+
+    expect(await screen.findByText('Searching your documents…')).toBeVisible()
+    expect(await screen.findByText('Sources')).toBeVisible()
+    expect(screen.getByText('handbook.pdf')).toBeVisible()
+    // After done, the saved transcript still shows them.
+    await waitFor(() => expect(screen.queryByText('Thinking…')).not.toBeInTheDocument())
+    expect(await screen.findByText('Searched your documents')).toBeVisible()
+    expect(screen.getByText('Sources')).toBeVisible()
+  })
+
+  it('shows Sources on assistant messages loaded from history', async () => {
+    server.use(
+      http.get('*/api/conversations/c1/messages', () =>
+        HttpResponse.json([
+          { role: 'user', content: 'q', tools: [], citations: [] },
+          { role: 'assistant', content: 'a', tools: [], citations: sources },
+        ]),
+      ),
+    )
+    renderPane()
+    expect(await screen.findByText('Sources')).toBeVisible()
+    expect(screen.getByText('handbook.pdf')).toBeVisible()
+  })
+
+  it('ignores a malformed citations event', async () => {
+    server.use(
+      http.get('*/api/conversations/c1/messages', () => HttpResponse.json([])),
+      http.post('*/api/conversations/c1/messages', () =>
+        sseResponse(
+          [
+            { event: 'token', data: { text: 'Fine' } },
+            { event: 'citations', data: { items: [{ filename: 5 }] } },
+            { event: 'done', data: { content: 'Fine' } },
+          ],
+          100,
+        ),
+      ),
+    )
+    renderPane()
+    await typeAndSend('hi')
+
+    expect(await screen.findByText('Fine')).toBeVisible()
+    await new Promise((r) => setTimeout(r, 300))
+    expect(screen.queryByText('Sources')).toBeNull()
   })
 })

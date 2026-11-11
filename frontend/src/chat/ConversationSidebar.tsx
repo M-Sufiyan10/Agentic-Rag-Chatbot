@@ -1,6 +1,14 @@
 import { useRef, useState } from 'react'
 import type { FormEvent } from 'react'
-import { LogOut, MessageSquare, MoreHorizontal, Pencil, SquarePen, Trash2 } from 'lucide-react'
+import {
+  FileText,
+  LogOut,
+  MessageSquare,
+  MoreHorizontal,
+  Pencil,
+  SquarePen,
+  Trash2,
+} from 'lucide-react'
 import { Link, useNavigate } from 'react-router'
 import { useAuth } from '@/auth/AuthProvider'
 import {
@@ -21,6 +29,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
+import DocumentsPanel from '@/documents/DocumentsPanel'
 import { cn } from '@/lib/utils'
 import { useConversations, useDeleteConversation, useRenameConversation } from './api'
 import type { Conversation } from './api'
@@ -38,6 +47,7 @@ export default function ConversationSidebar({ activeId, onNavigate }: Props) {
   const deleteConversation = useDeleteConversation()
   const [editingId, setEditingId] = useState<string | null>(null)
   const [pendingDelete, setPendingDelete] = useState<Conversation | null>(null)
+  const [documentsOpen, setDocumentsOpen] = useState(false)
 
   function confirmDelete() {
     if (!pendingDelete) return
@@ -104,6 +114,18 @@ export default function ConversationSidebar({ activeId, onNavigate }: Props) {
           </section>
         ))}
       </nav>
+
+      <div className="px-3 pb-2">
+        <Button
+          variant="ghost"
+          className="w-full justify-start gap-2"
+          onClick={() => setDocumentsOpen(true)}
+        >
+          <FileText />
+          Documents
+        </Button>
+      </div>
+      <DocumentsPanel open={documentsOpen} onOpenChange={setDocumentsOpen} />
 
       <AccountFooter />
 
