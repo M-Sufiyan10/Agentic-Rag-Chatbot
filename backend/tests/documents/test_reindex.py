@@ -1,4 +1,5 @@
 import io
+import sys
 import uuid
 from pathlib import Path
 
@@ -272,3 +273,19 @@ async def test_cli_exits_non_zero_when_embedding_fails(
     assert "(2 failed)" in out
     assert f"  - a.txt: {EMBEDDING_FAILED}" in out
     assert f"  - b.txt: {EMBEDDING_FAILED}" in out
+
+
+def test_cli_module_registers_every_table_on_its_own() -> None:
+    """Run as ``python -m``, the command must see ``users`` or saving chunks fails.
+
+    A fresh interpreter is needed: inside pytest the app has already imported every model.
+    """
+    import subprocess
+
+    probe = (
+        "import app.documents.reindex\n"
+        "from app.documents.models import Document\n"
+        "assert 'users' in Document.metadata.tables, sorted(Document.metadata.tables)\n"
+    )
+    done = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr

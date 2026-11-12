@@ -29,6 +29,9 @@ from langchain_core.embeddings import Embeddings
 from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+# Run as ``python -m``, nothing else imports the User model, and saving chunks then fails
+# because the documents.user_id foreign key can't find the ``users`` table.
+import app.models  # noqa: F401
 from app.config import Settings, get_settings
 from app.db import create_engine, create_sessionmaker
 from app.documents.embeddings import build_embeddings
@@ -136,7 +139,7 @@ async def _failures(
 
 
 def format_summary(result: ReindexResult, settings: Settings) -> str:
-    summary = f"Reindexed {result.documents} documents with {settings.embedding_model}"
+    summary = f"Reindexed {result.documents} documents with {settings.embedding_tag}"
     if result.resized_from is not None:
         summary += (
             f" (resized vectors {result.resized_from} \u2192 {settings.embedding_dimensions})"
