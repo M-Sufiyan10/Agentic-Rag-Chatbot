@@ -16,6 +16,7 @@ from app.agent.checkpointer import open_checkpointer
 from app.agent.graph import build_graph
 from app.agent.llm import build_chat_model
 from app.agent.mcp import load_mcp_config, load_mcp_tools
+from app.agent.prefetch import make_prefetcher
 from app.agent.tools import build_tools
 from app.auth.router import router as auth_router
 from app.chat.router import router as chat_router
@@ -80,12 +81,25 @@ def create_app(
             else:
                 saver = await stack.enter_async_context(open_checkpointer(settings.database_url))
             model = chat_model if chat_model is not None else build_chat_model(settings)
+            # Server-side retrieval before each answer; only with the real tool set
+            # (tests that inject tools drive the model's tool calls themselves).
+            prefetch = (
+                make_prefetcher(
+                    settings,
+                    sessionmaker=app.state.sessionmaker,
+                    embeddings=app.state.embeddings,
+                    web_search=next((t for t in agent_tools if t.name == "web_search"), None),
+                )
+                if tools is None
+                else None
+            )
             app.state.graph = build_graph(
                 model,
                 saver,
                 agent_tools,
                 max_tool_rounds=settings.agent_max_tool_rounds,
                 max_history_tokens=settings.llm_max_history_tokens,
+                prefetch=prefetch,
             )
             yield
 

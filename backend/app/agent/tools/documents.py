@@ -54,6 +54,61 @@ def _citation(chunk: RetrievedChunk) -> Citation:
     }
 
 
+async def search_user_documents(
+    query: str,
+    user_id: uuid.UUID,
+    *,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    embeddings: Embeddings,
+    settings: Settings,
+    max_distance: float | None = None,
+) -> tuple[str, list[Citation]]:
+    """Search ``user_id``'s documents; return the tool's text and its citation items.
+
+    With ``max_distance``, passages further from the query than that are dropped,
+    and the text is ``NOTHING_FOUND`` when none are left. Never raises: a failure
+    returns ``SEARCH_FAILED``.
+    """
+    try:
+        query_vector = await embeddings.aembed_query(query)
+        async with sessionmaker() as session:
+            chunks = await search_chunks(
+                session,
+                user_id=user_id,
+                query_vector=query_vector,
+                embedding_model=settings.embedding_tag,
+                k=settings.retrieval_k,
+            )
+            if max_distance is not None:
+                chunks = [chunk for chunk in chunks if chunk.distance <= max_distance]
+            mismatched = await count_mismatched_chunks(
+                session, user_id=user_id, embedding_model=settings.embedding_tag
+            )
+            if chunks:
+                processing = ready = 0
+            else:
+                processing = await count_documents(session, user_id=user_id, status="processing")
+                ready = await count_documents(session, user_id=user_id, status="ready")
+    except Exception:
+        logger.exception("Document search failed")
+        return SEARCH_FAILED, []
+
+    if chunks:
+        content = "\n\n".join(
+            f"[{n}] {chunk.filename} (chunk {chunk.chunk_index})\n{chunk.content}"
+            for n, chunk in enumerate(chunks, start=1)
+        )
+    elif processing:
+        content = STILL_PROCESSING
+    elif not ready:
+        content = NO_READY_DOCUMENTS
+    else:
+        content = NOTHING_FOUND
+    if mismatched:
+        content += "\n\n" + MISMATCH_NOTE.format(n=mismatched)
+    return content, [_citation(chunk) for chunk in chunks]
+
+
 def make_search_documents_tool(
     *,
     sessionmaker: async_sessionmaker[AsyncSession],
@@ -75,44 +130,8 @@ def make_search_documents_tool(
             user_id = uuid.UUID(str(raw_user_id))
         except ValueError:
             return UNAVAILABLE, []
-
-        try:
-            query_vector = await embeddings.aembed_query(query)
-            async with sessionmaker() as session:
-                chunks = await search_chunks(
-                    session,
-                    user_id=user_id,
-                    query_vector=query_vector,
-                    embedding_model=settings.embedding_model,
-                    k=settings.retrieval_k,
-                )
-                mismatched = await count_mismatched_chunks(
-                    session, user_id=user_id, embedding_model=settings.embedding_model
-                )
-                if chunks:
-                    processing = ready = 0
-                else:
-                    processing = await count_documents(
-                        session, user_id=user_id, status="processing"
-                    )
-                    ready = await count_documents(session, user_id=user_id, status="ready")
-        except Exception:
-            logger.exception("Document search failed")
-            return SEARCH_FAILED, []
-
-        if chunks:
-            content = "\n\n".join(
-                f"[{n}] {chunk.filename} (chunk {chunk.chunk_index})\n{chunk.content}"
-                for n, chunk in enumerate(chunks, start=1)
-            )
-        elif processing:
-            content = STILL_PROCESSING
-        elif not ready:
-            content = NO_READY_DOCUMENTS
-        else:
-            content = NOTHING_FOUND
-        if mismatched:
-            content += "\n\n" + MISMATCH_NOTE.format(n=mismatched)
-        return content, [_citation(chunk) for chunk in chunks]
+        return await search_user_documents(
+            query, user_id, sessionmaker=sessionmaker, embeddings=embeddings, settings=settings
+        )
 
     return search_documents

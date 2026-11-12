@@ -42,9 +42,16 @@ authenticated user and passes them as one nested dict,
 LangGraph copies top-level `str`/`int`/`float`/`bool` configurable values into
 every checkpoint's metadata, but not dicts, so filenames never reach the
 checkpoint. Users without ready or processing documents get the plain prompt.
+
+**Prefetch.** With ``prefetch`` given, a ``prefetch`` node runs first, once per
+turn (``START -> prefetch -> agent``), and adds server-side retrieval results
+as an ordinary tool call plus result before the model is called. Small models
+don't reliably call ``web_search`` or ``search_documents`` themselves; see
+``app.agent.prefetch``.
 """
 
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from typing import Any
 
 from langchain_core.language_models import BaseChatModel
@@ -63,7 +70,8 @@ from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode
 
-from app.agent.prompts import FINAL_ROUND_INSTRUCTION, SYSTEM_PROMPT, documents_note
+from app.agent.prefetch import Prefetcher
+from app.agent.prompts import FINAL_ROUND_INSTRUCTION, base_system_prompt, documents_note
 
 
 def _tool_rounds_this_turn(messages: Sequence[BaseMessage]) -> int:
@@ -115,6 +123,7 @@ def build_graph(
     *,
     max_tool_rounds: int = 5,
     max_history_tokens: int = 6000,
+    prefetch: Prefetcher | None = None,
 ) -> CompiledStateGraph[Any, Any, Any, Any]:
     """Compile the agent graph around `model`, persisting state via `checkpointer`."""
     # Bound once at build time; with no tools the plain model is used (bind_tools never called).
@@ -122,7 +131,7 @@ def build_graph(
 
     async def agent(state: MessagesState, config: RunnableConfig) -> dict[str, list[BaseMessage]]:
         history = _trim_history(state["messages"], max_history_tokens)
-        system = SYSTEM_PROMPT
+        system = base_system_prompt(datetime.now(UTC).date())
         note = documents_note((config.get("configurable") or {}).get("documents"))
         if note:
             system += "\n\n" + note
@@ -133,9 +142,25 @@ def build_graph(
             response = await tool_model.ainvoke(prompt)
         return {"messages": [response]}
 
+    async def prefetch_node(
+        state: MessagesState, config: RunnableConfig
+    ) -> dict[str, list[BaseMessage]]:
+        assert prefetch is not None
+        last_human = next(
+            (m for m in reversed(state["messages"]) if isinstance(m, HumanMessage)), None
+        )
+        if last_human is None or not last_human.text:
+            return {"messages": []}
+        return {"messages": await prefetch(last_human.text, config)}
+
     builder = StateGraph(MessagesState)
     builder.add_node("agent", agent)
-    builder.add_edge(START, "agent")
+    if prefetch is not None:
+        builder.add_node("prefetch", prefetch_node)
+        builder.add_edge(START, "prefetch")
+        builder.add_edge("prefetch", "agent")
+    else:
+        builder.add_edge(START, "agent")
     if tools:
         builder.add_node("tools", ToolNode(tools))
         builder.add_conditional_edges("agent", _route_after_agent, ["tools", END])

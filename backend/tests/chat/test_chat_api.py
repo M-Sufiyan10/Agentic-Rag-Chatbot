@@ -2,6 +2,7 @@
 
 import uuid
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -17,7 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.graph import build_graph
-from app.agent.prompts import DOCUMENTS_PROCESSING_NOTE, SYSTEM_PROMPT
+from app.agent.prompts import DOCUMENTS_PROCESSING_NOTE, SYSTEM_PROMPT, base_system_prompt
 from app.auth.models import User
 from app.chat import deps as chat_deps
 from app.chat import router as chat_router
@@ -315,7 +316,7 @@ async def test_documents_note_lists_only_the_senders_documents(
     await client.post(_messages_url(alice_cid), json={"content": "what's in it?"}, headers=alice)
 
     bob_prompt, alice_prompt = (_system_prompt(call) for call in chat_model.calls)
-    assert bob_prompt == SYSTEM_PROMPT
+    assert bob_prompt == base_system_prompt(datetime.now(UTC).date())
     assert "alpha-secret" not in bob_prompt
     assert alice_prompt.startswith(SYSTEM_PROMPT + "\n\n")
     assert '"alpha-secret.md"' in alice_prompt
@@ -333,7 +334,7 @@ async def test_documents_note_for_processing_only(
     await client.post(_messages_url(cid), json={"content": "summarise it"}, headers=headers)
 
     assert _system_prompt(chat_model.calls[0]) == (
-        SYSTEM_PROMPT + "\n\n" + DOCUMENTS_PROCESSING_NOTE
+        base_system_prompt(datetime.now(UTC).date()) + "\n\n" + DOCUMENTS_PROCESSING_NOTE
     )
 
 

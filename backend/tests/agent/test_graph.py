@@ -1,10 +1,12 @@
+from datetime import UTC, datetime
+
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import InMemorySaver
 
 from app.agent.graph import build_graph
-from app.agent.prompts import FINAL_ROUND_INSTRUCTION, SYSTEM_PROMPT
+from app.agent.prompts import FINAL_ROUND_INSTRUCTION, SYSTEM_PROMPT, base_system_prompt
 from tests.fakes import ScriptedChatModel, echo, tool_call_reply
 
 
@@ -164,4 +166,4 @@ async def test_no_documents_keeps_the_plain_system_prompt() -> None:
 
     await graph.ainvoke({"messages": [HumanMessage("x")]}, config)
 
-    assert model.calls[0][0] == SystemMessage(SYSTEM_PROMPT)
+    assert model.calls[0][0] == SystemMessage(base_system_prompt(datetime.now(UTC).date()))

@@ -73,6 +73,10 @@ def test_settings(tmp_path: Path) -> Settings:
         database_url=TEST_DATABASE_URL,
         jwt_secret="test-secret-test-secret-test-secret-0123",
         upload_dir=str(tmp_path),
+        # Fake embeddings hash the exact text, so tests keep queries and passages unprefixed;
+        # the stored tag is then just the model name.
+        embedding_query_prefix="",
+        embedding_document_prefix="",
     )
 
 

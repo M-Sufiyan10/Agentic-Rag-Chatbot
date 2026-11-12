@@ -92,7 +92,7 @@ async def ingest_document(
                     chunk_index=index,
                     content=content,
                     embedding=vector,
-                    embedding_model=settings.embedding_model,
+                    embedding_model=settings.embedding_tag,
                 )
                 for index, (content, vector) in enumerate(zip(chunks, vectors, strict=True))
             )

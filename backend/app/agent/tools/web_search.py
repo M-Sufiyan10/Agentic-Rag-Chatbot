@@ -30,12 +30,14 @@ def make_web_search_tool(
         except TimeoutError:
             return (
                 f"Error: web search timed out after {timeout}s. "
-                "Answer from what you know and say the search failed."
+                "Tell the user the web search failed, so you couldn't check recent facts; "
+                "don't guess whether recent events happened."
             )
         except Exception as exc:
             return (
                 f"Error: web search failed ({exc}). "
-                "Answer from what you know and say the search failed."
+                "Tell the user the web search failed, so you couldn't check recent facts; "
+                "don't guess whether recent events happened."
             )
         if not results:
             return "No results found."

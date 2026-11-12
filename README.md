@@ -137,24 +137,31 @@ These optional variables (all in [`.env.example`](.env.example)) tune the agent:
 | `OLLAMA_NUM_CTX`             | `8192`    | Ollama context window; `LLM_MAX_HISTORY_TOKENS` must be at most this minus 1500 |
 | `AGENT_MAX_TOOL_ROUNDS`      | `5`       | Tool-calling rounds allowed per message before the model must answer            |
 | `LLM_MAX_HISTORY_TOKENS`     | `6000`    | Token budget for the history the model sees (the stored one is full)            |
+| `AUTO_WEB_SEARCH`            | `true`    | Search the web before answering when the message needs fresh facts (see below)  |
+| `KNOWLEDGE_CUTOFF_YEAR`      | `2024`    | Messages naming a later year count as needing fresh facts                       |
 
-**Web search caveat:** `web_search` relies on a third-party, keyless metasearch library (ddgs) scraping public engines, so it can be slow, rate-limited or fail; the agent then tells the user the search failed. Some engines return nothing from some networks, so try another `WEB_SEARCH_BACKEND` (default `duckduckgo,brave,yahoo,startpage`; unknown engine names are rejected at startup) if results are empty.
+**Automatic web search:** small local models rarely decide to search on their own (the default 4B model answered "who won the 2026 FIFA World Cup?" from memory in 10 of 10 live runs, even with today's date in its prompt). So the server applies a fixed rule ([`freshness.py`](backend/app/agent/freshness.py)): a message naming a year after `KNOWLEDGE_CUTOFF_YEAR`, or using words such as _latest, current, news, today, price, won, release_, gets a web search before the model answers, shown as a normal tool chip. Weather, time and URL questions are left to their own tools. The rule can miss a question or search needlessly; the model can still call `web_search` itself. Details in [note 5](docs/learning/05-auto-retrieval.md).
+
+**Web search caveat:** `web_search` relies on a third-party, keyless metasearch library (ddgs) scraping public engines, so it can be slow, rate-limited or fail; the agent then tells the user the search failed. The engines also block automated traffic: on 12 November 2026, from the development machine, every engine returned "No results found" (DuckDuckGo answered with an HTTP 202 challenge page, Brave with HTTP 429), and a few minutes later searches worked again. Some engines return nothing from some networks, so try another `WEB_SEARCH_BACKEND` (default `duckduckgo,brave,yahoo,startpage`; unknown engine names are rejected at startup) if results are empty.
 
 ## Documents settings
 
 Supported uploads are `.pdf`, `.docx`, `.txt` and `.md`, up to `MAX_UPLOAD_MB` (default 10; larger files get `413`, unsupported or mismatched files `415`). Scanned PDFs with no text layer are marked `failed`. Uploaded files are stored under `UPLOAD_DIR` (gitignored) and never served back. These optional variables are in [`.env.example`](.env.example):
 
-| Variable               | Default            | Meaning                                                      |
-| ---------------------- | ------------------ | ------------------------------------------------------------ |
-| `EMBEDDING_PROVIDER`   | `ollama`           | Provider name for LangChain's `init_embeddings`              |
-| `EMBEDDING_MODEL`      | `nomic-embed-text` | Embedding model                                              |
-| `EMBEDDING_DIMENSIONS` | `768`              | Vector size; fixes the column size when the migration runs   |
-| `UPLOAD_DIR`           | `./data/uploads`   | Where uploaded files are stored                              |
-| `MAX_UPLOAD_MB`        | `10`               | Upload size limit                                            |
-| `CHUNK_SIZE`           | `1000`             | Characters per chunk                                         |
-| `CHUNK_OVERLAP`        | `150`              | Characters shared between neighbouring chunks                |
-| `RETRIEVAL_K`          | `4`                | Chunks returned per search (no reranking)                    |
-| `MAX_DOCUMENT_CHUNKS`  | `500`              | Documents with more chunks are marked `failed`, not embedded |
+| Variable                                               | Default            | Meaning                                                                     |
+| ------------------------------------------------------ | ------------------ | --------------------------------------------------------------------------- |
+| `EMBEDDING_PROVIDER`                                   | `ollama`           | Provider name for LangChain's `init_embeddings`                             |
+| `EMBEDDING_MODEL`                                      | `nomic-embed-text` | Embedding model                                                             |
+| `EMBEDDING_DIMENSIONS`                                 | `768`              | Vector size; fixes the column size when the migration runs                  |
+| `UPLOAD_DIR`                                           | `./data/uploads`   | Where uploaded files are stored                                             |
+| `MAX_UPLOAD_MB`                                        | `10`               | Upload size limit                                                           |
+| `CHUNK_SIZE`                                           | `1000`             | Characters per chunk                                                        |
+| `CHUNK_OVERLAP`                                        | `150`              | Characters shared between neighbouring chunks                               |
+| `RETRIEVAL_K`                                          | `4`                | Chunks returned per search (no reranking)                                   |
+| `MAX_DOCUMENT_CHUNKS`                                  | `500`              | Documents with more chunks are marked `failed`, not embedded                |
+| `AUTO_DOCUMENT_SEARCH`                                 | `true`             | Search the user's documents before every answer                             |
+| `AUTO_DOCUMENT_MAX_DISTANCE`                           | `0.48`             | Keep only passages this close to the question (cosine distance)             |
+| `EMBEDDING_QUERY_PREFIX` / `EMBEDDING_DOCUMENT_PREFIX` | model default      | Task prefixes; nomic-embed-text gets `search_query: ` / `search_document: ` |
 
 **Changing the embedding model:** each chunk remembers the model that embedded it, and search only uses chunks from the configured model (it tells the model when some were skipped). After changing `EMBEDDING_MODEL` or `EMBEDDING_DIMENSIONS`, re-embed everything, resizing the vector column if needed:
 
@@ -165,7 +172,9 @@ uv run python -m app.documents.reindex
 
 It exits non-zero if any document fails; fix the cause and run it again.
 
-**Will the model search?** Each turn the server tells the model which documents the user has (their ready filenames, at most 20), so it knows there is something to search. In live runs with the default 4B model this made "What is the codename of the Zephyr-9 project according to my documents?" call `search_documents` and answer with a citation 3 times out of 3. A question that doesn't mention documents ("What's the Zephyr-9 project's codename?") still never did (0 of 9 live runs across two wordings of the note, including "What's the budget of the Zephyr-9 project?"), so mention your documents when you ask. The measured runs are in [note 3, sections 8 and 9](docs/learning/03-documents-rag.md#8-telling-the-model-what-you-have).
+**Will the model search?** It doesn't have to decide any more. Before every answer, the server searches the signed-in user's ready documents with their message and hands the model the passages within `AUTO_DOCUMENT_MAX_DISTANCE` of it, with citations. This replaced relying on the model: with the default 4B model, a question that didn't mention documents never made it call `search_documents` (0 of 9 runs in M3, 0 of 4 in a later check), whereas with automatic retrieval "tell me about the one digital security assessment review" answered from the uploaded report with 4 citations. The threshold is a trade-off: on the one real report measured, questions about it scored 0.28-0.47 and unrelated ones 0.48-0.57, but some general questions close to the report's subject ("what is a penetration test?", "what is the latest version of python?") scored 0.40-0.45 and also get passages, which the model is free to ignore. Lower the threshold to attach passages less often. Details in [note 5](docs/learning/05-auto-retrieval.md).
+
+**After upgrading from M4:** the task prefixes changed how documents are embedded, so existing chunks count as embedded with a different model until you run the reindex command above once.
 
 ## MCP
 

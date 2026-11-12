@@ -22,7 +22,8 @@ The graph is run with ``stream_mode=["messages", "updates"]``, which yields
   ``tool_start`` each, in order: ``{"id", "name", "input": args}``. Under
   ``"tools"``, each ``ToolMessage`` becomes a ``tool_end``:
   ``{"id": tool_call_id, "name": name, "output": text[:TOOL_OUTPUT_LIMIT]}``,
-  where the text is ``ToolMessage.text``.
+  where the text is ``ToolMessage.text``. Under ``"prefetch"`` (server-side
+  retrieval before the model runs, see ``app.agent.prefetch``), both apply.
 
 ``citations``: when a ``search_documents`` ``ToolMessage`` carries an
 ``artifact`` list, its items are collected; if any were, one
@@ -140,7 +141,8 @@ def _events_for_update(
         if not isinstance(node_update, dict):  # e.g. a node that returned None
             continue
         for message in node_update.get("messages", []):
-            if node == "agent" and isinstance(message, AIMessage):
+            # The prefetch node writes both halves of a tool exchange in one update.
+            if node in ("agent", "prefetch") and isinstance(message, AIMessage):
                 for call in message.tool_calls:
                     reply_parts.clear()
                     events.append(
@@ -149,7 +151,7 @@ def _events_for_update(
                             {"id": call["id"], "name": call["name"], "input": call["args"]},
                         )
                     )
-            elif node == "tools" and isinstance(message, ToolMessage):
+            elif node in ("tools", "prefetch") and isinstance(message, ToolMessage):
                 citations.extend(citation_items(message))
                 events.append(
                     sse_event(
