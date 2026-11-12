@@ -149,13 +149,20 @@ def guard_mcp_tool(
     """
 
     async def call(**kwargs: Any) -> Any:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        timed_out = f"Error: the {server} tool server didn't respond in {timeout:g}s."
         try:
             result = await asyncio.wait_for(tool.ainvoke(kwargs), timeout)
         except TimeoutError:
-            return f"Error: the {server} tool server didn't respond in {timeout:g}s."
+            return timed_out
         except ToolException as exc:
             return str(exc)
         except Exception as exc:
+            # Cancelling a hung stdio session can fail while it shuts down (e.g. anyio's
+            # BrokenResourceError), and that error replaces the TimeoutError.
+            if loop.time() >= deadline:
+                return timed_out
             return f"Error: the {server} tool server failed ({_reason(exc)})."
         return _content_text(result)
 
