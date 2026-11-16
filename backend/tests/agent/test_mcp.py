@@ -248,4 +248,4 @@ async def test_health_reports_mcp_server_status(
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             response = await client.get("/api/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "mcp": {"echo": "ok"}}
+    assert response.json() == {"status": "ok", "mcp": {"echo": "ok"}, "langfuse": "off"}

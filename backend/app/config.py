@@ -3,7 +3,7 @@
 from functools import lru_cache
 
 from ddgs.engines import ENGINES
-from pydantic import field_validator, model_validator
+from pydantic import SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _CONTEXT_HEADROOM_TOKENS = 1500
@@ -51,6 +51,11 @@ class Settings(BaseSettings):
     mcp_config_path: str = "mcp_servers.json"
     mcp_tool_timeout_seconds: float = 30
     mcp_startup_timeout_seconds: float = 20
+    # Optional Langfuse tracing: on only when both keys are set.
+    langfuse_public_key: str | None = None
+    langfuse_secret_key: SecretStr | None = None
+    langfuse_base_url: str = "http://localhost:3100"
+    langfuse_timeout_seconds: float = 5
 
     @model_validator(mode="after")
     def _default_embedding_prefixes(self) -> "Settings":

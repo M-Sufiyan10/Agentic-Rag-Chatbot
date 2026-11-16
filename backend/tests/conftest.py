@@ -77,6 +77,9 @@ def test_settings(tmp_path: Path) -> Settings:
         # the stored tag is then just the model name.
         embedding_query_prefix="",
         embedding_document_prefix="",
+        # A developer's .env may enable tracing; tests must never reach Langfuse.
+        langfuse_public_key=None,
+        langfuse_secret_key=None,
     )
 
 

@@ -1,5 +1,6 @@
 """FastAPI application factory."""
 
+import asyncio
 from collections.abc import AsyncIterator, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
@@ -27,6 +28,7 @@ from app.documents.embeddings import build_embeddings
 from app.documents.ingestion import fail_interrupted_documents
 from app.documents.router import router as documents_router
 from app.documents.storage import LocalFileStorage
+from app.observability import Tracing, build_tracing
 
 
 def create_app(
@@ -74,6 +76,11 @@ def create_app(
         await fail_interrupted_documents(app.state.sessionmaker)
         async with AsyncExitStack() as stack:
             stack.push_async_callback(engine.dispose)
+            tracing = build_tracing(settings)
+            app.state.tracing = tracing
+            if tracing is not None:
+                stack.push_async_callback(asyncio.to_thread, tracing.shutdown)
+                await tracing.check()
             agent_tools = list(tools) if tools is not None else await build_agent_tools(app)
             saver: BaseCheckpointSaver[Any]
             if checkpointer is not None:
@@ -106,6 +113,7 @@ def create_app(
     app = FastAPI(title="Chatbot API", lifespan=lifespan)
     app.state.settings = settings
     app.state.mcp_servers = {}  # server name -> "ok" | "unavailable"; set at startup
+    app.state.tracing = None  # Tracing | None; set at startup
 
     app.add_middleware(
         CORSMiddleware,
@@ -119,7 +127,12 @@ def create_app(
 
     @api.get("/health")
     async def health() -> dict[str, Any]:
-        return {"status": "ok", "mcp": app.state.mcp_servers}
+        tracing: Tracing | None = app.state.tracing
+        return {
+            "status": "ok",
+            "mcp": app.state.mcp_servers,
+            "langfuse": "off" if tracing is None else tracing.status,
+        }
 
     api.include_router(auth_router)
     api.include_router(conversations_router)
