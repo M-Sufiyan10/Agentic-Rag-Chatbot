@@ -76,6 +76,8 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.graph.state import CompiledStateGraph
 from sse_starlette import ServerSentEvent
 
+from app.observability import Tracing, trace_id_for_turn
+
 logger = logging.getLogger(__name__)
 
 MODEL_ERROR_MESSAGE = (
@@ -212,6 +214,7 @@ async def stream_agent_events(
     user_text: str,
     user_id: str,
     documents: dict[str, Any] | None = None,
+    tracing: Tracing | None = None,
 ) -> AsyncGenerator[ServerSentEvent]:
     """Run the agent on ``user_text`` in thread ``thread_id`` and yield SSE events.
 
@@ -222,6 +225,9 @@ async def stream_agent_events(
     ``configurable.documents`` for the agent's per-turn documents note. It must
     stay one nested dict: LangGraph copies top-level scalar configurable values
     into checkpoint metadata, but not dicts.
+
+    With ``tracing``, the run gets its Langfuse callbacks (one trace per turn,
+    id derived from the user message's id), tagged with the user and thread.
 
     Only the *new* user message is sent: the checkpointer loads the earlier
     history of ``thread_id`` before the graph runs and saves the result after.
@@ -238,6 +244,14 @@ async def stream_agent_events(
     reply_parts: list[str] = []
     citations: list[dict[str, Any]] = []
     human_message = HumanMessage(user_text, id=str(uuid4()))
+    if tracing is not None:
+        config["callbacks"] = tracing.callbacks(trace_id_for_turn(str(human_message.id)))
+        config["metadata"] = {
+            "langfuse_user_id": user_id,
+            "langfuse_session_id": thread_id,
+            "langfuse_tags": ["chat"],
+        }
+        config["run_name"] = "chat-turn"
     # With a list of modes, astream yields (mode, payload) pairs; its declared type can't say so.
     stream = cast(
         AsyncGenerator[tuple[str, Any]],

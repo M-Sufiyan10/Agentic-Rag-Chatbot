@@ -3,9 +3,14 @@
 import json
 import re
 from collections.abc import AsyncIterator, Sequence
+from datetime import datetime
 from typing import Any
 
-from langchain_core.callbacks import AsyncCallbackManagerForLLMRun, CallbackManagerForLLMRun
+from langchain_core.callbacks import (
+    AsyncCallbackManagerForLLMRun,
+    BaseCallbackHandler,
+    CallbackManagerForLLMRun,
+)
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
@@ -117,3 +122,49 @@ class ScriptedChatModel(BaseChatModel):
             return
         for piece in re.findall(r"\S+\s*", str(reply.content)):
             yield ChatGenerationChunk(message=AIMessageChunk(content=piece))
+
+
+class RecordingHandler(BaseCallbackHandler):
+    """Records the name and metadata of every chain start."""
+
+    def __init__(self) -> None:
+        self.chains: list[tuple[str | None, dict[str, Any]]] = []
+
+    def on_chain_start(
+        self,
+        serialized: dict[str, Any] | None,
+        inputs: Any,
+        *,
+        metadata: dict[str, Any] | None = None,
+        name: str | None = None,
+        **kwargs: Any,
+    ) -> None:
+        self.chains.append((name, dict(metadata or {})))
+
+
+class FakeTracing:
+    """A `Tracing` double: records trace ids and hands out one recording handler."""
+
+    status = "ok"
+
+    def __init__(self) -> None:
+        self.trace_ids: list[str] = []
+        self.handler = RecordingHandler()
+
+    def callbacks(self, trace_id: str) -> list[BaseCallbackHandler]:
+        self.trace_ids.append(trace_id)
+        return [self.handler]
+
+    async def check(self) -> str:
+        return self.status
+
+    async def record_feedback(
+        self, *, turn_id: str, positive: bool, first_voted_at: datetime
+    ) -> None:
+        return None
+
+    async def delete_feedback(self, *, turn_id: str) -> None:
+        return None
+
+    def shutdown(self) -> None:
+        return None

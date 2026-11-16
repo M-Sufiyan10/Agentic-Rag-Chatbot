@@ -24,7 +24,14 @@ from app.chat import deps as chat_deps
 from app.chat import router as chat_router
 from app.documents.models import Document
 from tests.conftest import FAKE_REPLY, read_sse, register_user
-from tests.fakes import ScriptedChatModel, echo, fake_search_documents, tool_call_reply, whoami
+from tests.fakes import (
+    FakeTracing,
+    ScriptedChatModel,
+    echo,
+    fake_search_documents,
+    tool_call_reply,
+    whoami,
+)
 
 CONVERSATIONS = "/api/conversations"
 
@@ -126,6 +133,18 @@ async def test_delete_conversation_deletes_thread(app: FastAPI, client: httpx.As
     assert r.status_code == 204
     state = await app.state.graph.aget_state(config)
     assert state.values.get("messages", []) == []
+
+
+async def test_chat_endpoint_passes_app_tracing(app: FastAPI, client: httpx.AsyncClient) -> None:
+    fake = FakeTracing()
+    app.state.tracing = fake
+    headers = await register_user(client)
+    cid = await _new_conversation(client, headers)
+
+    r = await client.post(_messages_url(cid), json={"content": "hi"}, headers=headers)
+
+    assert r.status_code == 200
+    assert len(fake.trace_ids) == 1
 
 
 class FailsOnceChatModel(GenericFakeChatModel):

@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,6 +24,7 @@ from app.conversations.models import Conversation
 from app.conversations.service import get_owned_conversation
 from app.db import get_session
 from app.documents.retrieval import document_overview
+from app.observability import Tracing
 
 router = APIRouter(prefix="/conversations", tags=["chat"])
 
@@ -48,6 +49,7 @@ async def stream_and_release(
     text: str,
     user_id: str,
     documents: dict[str, Any] | None = None,
+    tracing: Tracing | None = None,
 ) -> AsyncIterator[ServerSentEvent]:
     """Stream the agent's events, then release ``conversation_id``.
 
@@ -60,7 +62,9 @@ async def stream_and_release(
     """
     try:
         async with aclosing(
-            stream_agent_events(graph, str(conversation_id), text, user_id, documents)
+            stream_agent_events(
+                graph, str(conversation_id), text, user_id, documents, tracing=tracing
+            )
         ) as events:
             async for event in events:
                 yield event
@@ -72,6 +76,7 @@ async def stream_and_release(
 async def send_message(
     conversation_id: UUID,
     body: MessageIn,
+    request: Request,
     session: SessionDep,
     user: CurrentUser,
     graph: GraphDep,
@@ -102,7 +107,12 @@ async def send_message(
     release = BackgroundTask(in_progress_conversations.discard, conversation_id)
     return EventSourceResponse(
         stream_and_release(
-            graph, conversation_id, body.content, str(user.id), dataclasses.asdict(overview)
+            graph,
+            conversation_id,
+            body.content,
+            str(user.id),
+            dataclasses.asdict(overview),
+            tracing=request.app.state.tracing,
         ),
         background=release,
     )

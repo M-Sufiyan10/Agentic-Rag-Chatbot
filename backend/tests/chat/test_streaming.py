@@ -1,6 +1,7 @@
 """Unit tests for ``stream_agent_events`` (no HTTP, no database)."""
 
 import json
+import uuid
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -14,7 +15,14 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from app.agent.graph import build_graph
 from app.chat.streaming import MODEL_ERROR_MESSAGE, stream_agent_events
-from tests.fakes import ScriptedChatModel, echo, fake_search_documents, tool_call_reply, whoami
+from tests.fakes import (
+    FakeTracing,
+    ScriptedChatModel,
+    echo,
+    fake_search_documents,
+    tool_call_reply,
+    whoami,
+)
 
 CONFIG: Any = {"configurable": {"thread_id": "thread-1"}}
 
@@ -312,3 +320,58 @@ async def test_no_citations_event_when_run_fails_after_a_search() -> None:
     assert "citations" not in names
     assert events[-1] == ("error", {"message": MODEL_ERROR_MESSAGE})
     assert await _state_messages(graph) == []
+
+
+async def _collect_traced(
+    graph: Any, tracing: FakeTracing | None
+) -> list[tuple[str, dict[str, Any]]]:
+    return [
+        (event.event or "", json.loads(event.data))
+        async for event in stream_agent_events(
+            graph, "thread-1", "say hi", "user-1", tracing=tracing
+        )
+    ]
+
+
+async def test_turn_is_traced_with_user_and_session() -> None:
+    graph = _tool_graph([AIMessage("hello")])
+    tracing = FakeTracing()
+
+    await _collect_traced(graph, tracing)
+
+    (human,) = [m for m in await _state_messages(graph) if isinstance(m, HumanMessage)]
+    assert tracing.trace_ids == [uuid.UUID(str(human.id)).hex]
+    names = [name for name, _ in tracing.handler.chains]
+    assert "chat-turn" in names
+    metadata = dict(tracing.handler.chains)["chat-turn"]
+    assert metadata["langfuse_user_id"] == "user-1"
+    assert metadata["langfuse_session_id"] == "thread-1"
+    assert metadata["langfuse_tags"] == ["chat"]
+
+
+async def test_no_tracing_adds_no_callbacks() -> None:
+    graph = _tool_graph([AIMessage("hello")])
+    seen: list[Any] = []
+    original = graph.astream
+
+    def spy(input: Any, config: Any = None, **kwargs: Any) -> Any:
+        seen.append(config)
+        return original(input, config, **kwargs)
+
+    graph.astream = spy
+
+    await _collect_traced(graph, None)
+
+    (config,) = seen
+    assert not {"callbacks", "metadata", "run_name"} & set(config)
+
+
+async def test_events_unchanged_with_tracing() -> None:
+    def replies() -> list[AIMessage | Exception]:
+        return [tool_call_reply("echo", {"text": "hi"}, "c1"), AIMessage("It said hi")]
+
+    plain = await _collect_traced(_tool_graph(replies()), None)
+    traced = await _collect_traced(_tool_graph(replies()), FakeTracing())
+
+    assert [n for n, _ in traced] == [n for n, _ in plain]
+    assert traced == plain
