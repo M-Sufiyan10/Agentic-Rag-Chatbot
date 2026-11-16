@@ -150,6 +150,8 @@ class FakeTracing:
     def __init__(self) -> None:
         self.trace_ids: list[str] = []
         self.handler = RecordingHandler()
+        self.recorded: list[dict[str, Any]] = []
+        self.deleted: list[str] = []
 
     def callbacks(self, trace_id: str) -> list[BaseCallbackHandler]:
         self.trace_ids.append(trace_id)
@@ -161,10 +163,12 @@ class FakeTracing:
     async def record_feedback(
         self, *, turn_id: str, positive: bool, first_voted_at: datetime
     ) -> None:
-        return None
+        self.recorded.append(
+            {"turn_id": turn_id, "positive": positive, "first_voted_at": first_voted_at}
+        )
 
     async def delete_feedback(self, *, turn_id: str) -> None:
-        return None
+        self.deleted.append(turn_id)
 
     def shutdown(self) -> None:
         return None

@@ -4,6 +4,7 @@ import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Any
+from unittest.mock import ANY
 
 import httpx
 import pytest
@@ -73,8 +74,22 @@ async def test_history_after_one_exchange(client: httpx.AsyncClient) -> None:
 
     assert r.status_code == 200
     assert r.json() == [
-        {"role": "user", "content": "hi there", "tools": [], "citations": []},
-        {"role": "assistant", "content": FAKE_REPLY, "tools": [], "citations": []},
+        {
+            "id": None,
+            "role": "user",
+            "content": "hi there",
+            "tools": [],
+            "citations": [],
+            "feedback": None,
+        },
+        {
+            "id": ANY,
+            "role": "assistant",
+            "content": FAKE_REPLY,
+            "tools": [],
+            "citations": [],
+            "feedback": None,
+        },
     ]
 
 
@@ -179,8 +194,22 @@ async def test_retry_after_model_failure_leaves_clean_history(client: httpx.Asyn
 
     history = await client.get(_messages_url(cid), headers=headers)
     assert history.json() == [
-        {"role": "user", "content": "hi", "tools": [], "citations": []},
-        {"role": "assistant", "content": "ok", "tools": [], "citations": []},
+        {
+            "id": None,
+            "role": "user",
+            "content": "hi",
+            "tools": [],
+            "citations": [],
+            "feedback": None,
+        },
+        {
+            "id": ANY,
+            "role": "assistant",
+            "content": "ok",
+            "tools": [],
+            "citations": [],
+            "feedback": None,
+        },
     ]
 
 
@@ -225,8 +254,22 @@ async def test_tool_events_streamed_and_listed_in_transcript(client: httpx.Async
     assert names[-1] == "done"
     history = await client.get(_messages_url(cid), headers=headers)
     assert history.json() == [
-        {"role": "user", "content": "say hi", "tools": [], "citations": []},
-        {"role": "assistant", "content": "It said hi", "tools": ["echo"], "citations": []},
+        {
+            "id": None,
+            "role": "user",
+            "content": "say hi",
+            "tools": [],
+            "citations": [],
+            "feedback": None,
+        },
+        {
+            "id": ANY,
+            "role": "assistant",
+            "content": "It said hi",
+            "tools": ["echo"],
+            "citations": [],
+            "feedback": None,
+        },
     ]
 
 
@@ -248,8 +291,22 @@ async def test_transcript_skips_preamble_of_tool_call_message(client: httpx.Asyn
     await client.post(_messages_url(cid), json={"content": "say hi"}, headers=headers)
     history = await client.get(_messages_url(cid), headers=headers)
     assert history.json() == [
-        {"role": "user", "content": "say hi", "tools": [], "citations": []},
-        {"role": "assistant", "content": "answer", "tools": ["echo"], "citations": []},
+        {
+            "id": None,
+            "role": "user",
+            "content": "say hi",
+            "tools": [],
+            "citations": [],
+            "feedback": None,
+        },
+        {
+            "id": ANY,
+            "role": "assistant",
+            "content": "answer",
+            "tools": ["echo"],
+            "citations": [],
+            "feedback": None,
+        },
     ]
 
 
@@ -383,6 +440,20 @@ async def test_failed_turn_after_search_leaves_no_citations(client: httpx.AsyncC
     retry = await client.post(_messages_url(cid), json={"content": "hi"}, headers=headers)
     assert "citations" not in [name for name, _ in read_sse(retry)]
     assert (await client.get(_messages_url(cid), headers=headers)).json() == [
-        {"role": "user", "content": "hi", "tools": [], "citations": []},
-        {"role": "assistant", "content": "ok", "tools": [], "citations": []},
+        {
+            "id": None,
+            "role": "user",
+            "content": "hi",
+            "tools": [],
+            "citations": [],
+            "feedback": None,
+        },
+        {
+            "id": ANY,
+            "role": "assistant",
+            "content": "ok",
+            "tools": [],
+            "citations": [],
+            "feedback": None,
+        },
     ]

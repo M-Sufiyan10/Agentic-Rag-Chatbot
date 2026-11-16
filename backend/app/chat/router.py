@@ -8,8 +8,8 @@ from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette import EventSourceResponse, ServerSentEvent
 from starlette.background import BackgroundTask
@@ -18,12 +18,14 @@ from app.agent.prompts import PROMPT_DOCUMENT_LIMIT
 from app.auth.deps import get_current_user
 from app.auth.models import User
 from app.chat.deps import Graph, GraphDep, in_progress_conversations
-from app.chat.schemas import CitationOut, MessageIn, MessageOut
-from app.chat.streaming import citation_items, dedupe_citations, stream_agent_events
+from app.chat.schemas import MessageIn, MessageOut
+from app.chat.streaming import stream_agent_events
+from app.chat.transcript import build_transcript
 from app.conversations.models import Conversation
 from app.conversations.service import get_owned_conversation
 from app.db import get_session
 from app.documents.retrieval import document_overview
+from app.feedback.models import MessageFeedback
 from app.observability import Tracing
 
 router = APIRouter(prefix="/conversations", tags=["chat"])
@@ -131,32 +133,10 @@ async def get_messages(
     await get_owned_conversation(session, user.id, conversation_id)
     config: RunnableConfig = {"configurable": {"thread_id": str(conversation_id)}}
     snapshot = await graph.aget_state(config)
-    transcript: list[MessageOut] = []
-    tools_used: list[str] = []
-    found: list[dict[str, Any]] = []
-    for message in snapshot.values.get("messages", []):
-        if isinstance(message, HumanMessage):
-            tools_used = []
-            found = []
-            if isinstance(message.content, str) and message.content:
-                transcript.append(MessageOut(role="user", content=message.content))
-        elif isinstance(message, ToolMessage):
-            found.extend(citation_items(message))
-        elif isinstance(message, AIMessage):
-            tools_used.extend(call["name"] for call in message.tool_calls)
-            # A preamble that came with tool calls is not an answer; the chips attach to
-            # the final reply, matching the live view.
-            if message.tool_calls:
-                continue
-            if isinstance(message.content, str) and message.content:
-                transcript.append(
-                    MessageOut(
-                        role="assistant",
-                        content=message.content,
-                        tools=tools_used,
-                        citations=[CitationOut(**c) for c in dedupe_citations(found)],
-                    )
-                )
-                tools_used = []
-                found = []
-    return transcript
+    rows = await session.execute(
+        select(MessageFeedback.turn_id, MessageFeedback.positive).where(
+            MessageFeedback.conversation_id == conversation_id
+        )
+    )
+    feedback = {str(turn_id): positive for turn_id, positive in rows}
+    return build_transcript(snapshot.values.get("messages", []), feedback)

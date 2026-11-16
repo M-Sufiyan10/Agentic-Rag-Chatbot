@@ -28,6 +28,7 @@ from app.documents.embeddings import build_embeddings
 from app.documents.ingestion import fail_interrupted_documents
 from app.documents.router import router as documents_router
 from app.documents.storage import LocalFileStorage
+from app.feedback.router import router as feedback_router
 from app.observability import Tracing, build_tracing
 
 
@@ -138,5 +139,6 @@ def create_app(
     api.include_router(conversations_router)
     api.include_router(chat_router)
     api.include_router(documents_router)
+    api.include_router(feedback_router)
     app.include_router(api)
     return app

@@ -23,9 +23,13 @@ class CitationOut(BaseModel):
 class MessageOut(BaseModel):
     """One entry of a conversation transcript."""
 
+    id: str | None = None
+    """For an assistant message, the turn id (the user message's id); ``None`` for user messages."""
     role: Literal["user", "assistant"]
     content: str
     tools: list[str] = []
     """For an assistant message, the tools called since the previous user message, in order."""
     citations: list[CitationOut] = Field(default_factory=list)
     """For an assistant message, the de-duplicated document chunks cited this turn."""
+    feedback: Literal["up", "down"] | None = None
+    """For an assistant message, the caller's thumbs vote on it, if any."""
