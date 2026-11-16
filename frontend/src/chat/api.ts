@@ -80,7 +80,9 @@ export function clearFeedback(conversationId: string, turnId: string): Promise<v
 export function useFeedback(conversationId: string) {
   const queryClient = useQueryClient()
   const key = messagesKey(conversationId)
+  const mutationKey = ['feedback', conversationId] as const
   return useMutation({
+    mutationKey,
     mutationFn: ({ turnId, value }: { turnId: string; value: FeedbackValue | null }): Promise<unknown> =>
       value === null ? clearFeedback(conversationId, turnId) : setFeedback(conversationId, turnId, value),
     onMutate: async ({ turnId, value }) => {
@@ -93,6 +95,13 @@ export function useFeedback(conversationId: string) {
     },
     onError: (_err, _vars, context) => {
       if (context?.previous) queryClient.setQueryData(key, context.previous)
+    },
+    // The server is the source of truth: once the last overlapping vote settles,
+    // refetch so a stale rollback snapshot can't leave the UI out of sync.
+    onSettled: () => {
+      if (queryClient.isMutating({ mutationKey }) <= 1) {
+        return queryClient.invalidateQueries({ queryKey: key })
+      }
     },
   })
 }
