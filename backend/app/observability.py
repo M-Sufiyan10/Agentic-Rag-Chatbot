@@ -46,13 +46,15 @@ class Tracing(Protocol):
 
 class LangfuseTracing:
     def __init__(self, settings: Settings, *, span_exporter: SpanExporter | None = None) -> None:
-        assert settings.langfuse_public_key and settings.langfuse_secret_key
+        secret = settings.langfuse_secret_key
+        if not settings.langfuse_public_key or secret is None or not secret.get_secret_value():
+            raise ValueError("LangfuseTracing needs both Langfuse keys")
         self._timeout = settings.langfuse_timeout_seconds
         self._public_key = settings.langfuse_public_key
         self.status = "unavailable"
         self._client = Langfuse(
             public_key=self._public_key,
-            secret_key=settings.langfuse_secret_key.get_secret_value(),
+            secret_key=secret.get_secret_value(),
             base_url=settings.langfuse_base_url,
             timeout=max(1, math.ceil(self._timeout)),
             span_exporter=span_exporter,
@@ -103,6 +105,7 @@ class LangfuseTracing:
 
 def build_tracing(settings: Settings) -> LangfuseTracing | None:
     """A tracing client, or ``None`` unless both Langfuse keys are set."""
-    if not settings.langfuse_public_key or settings.langfuse_secret_key is None:
+    secret = settings.langfuse_secret_key
+    if not settings.langfuse_public_key or secret is None or not secret.get_secret_value():
         return None
     return LangfuseTracing(settings)

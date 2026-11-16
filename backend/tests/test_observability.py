@@ -3,6 +3,7 @@
 import itertools
 import time
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -87,8 +88,6 @@ async def test_unreachable_langfuse_reports_unavailable_quickly(test_settings: S
 async def test_feedback_calls_never_raise(
     test_settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from datetime import UTC, datetime
-
     tracing = LangfuseTracing(
         _settings(test_settings, langfuse_base_url="http://127.0.0.1:9"),
         span_exporter=InMemorySpanExporter(),
@@ -112,3 +111,40 @@ async def test_feedback_calls_never_raise(
 
 def test_tests_run_without_tracing(test_settings: Settings) -> None:
     assert build_tracing(test_settings) is None
+
+
+def test_empty_keys_count_as_unset(test_settings: Settings) -> None:
+    empty_public = {"langfuse_public_key": "", "langfuse_secret_key": SecretStr("sk")}
+    empty_secret = {"langfuse_public_key": "pk-x", "langfuse_secret_key": SecretStr("")}
+    assert build_tracing(test_settings.model_copy(update=empty_public)) is None
+    assert build_tracing(test_settings.model_copy(update=empty_secret)) is None
+
+
+async def test_feedback_score_contract(
+    test_settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tracing = LangfuseTracing(
+        _settings(test_settings, langfuse_base_url="http://127.0.0.1:9"),
+        span_exporter=InMemorySpanExporter(),
+    )
+    scores: list[dict[str, Any]] = []
+    deleted: list[str] = []
+    monkeypatch.setattr(tracing._client, "create_score", lambda **kw: scores.append(kw))
+    monkeypatch.setattr(
+        tracing._client.api.scores, "delete", lambda score_id: deleted.append(score_id)
+    )
+    turn_id = str(uuid.uuid4())
+    ts = datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
+    base = {
+        "name": "user_feedback",
+        "data_type": "BOOLEAN",
+        "trace_id": uuid.UUID(turn_id).hex,
+        "score_id": f"feedback-{turn_id}",
+        "timestamp": ts,
+    }
+    await tracing.record_feedback(turn_id=turn_id, positive=True, first_voted_at=ts)
+    await tracing.record_feedback(turn_id=turn_id, positive=False, first_voted_at=ts)
+    await tracing.delete_feedback(turn_id=turn_id)
+    assert scores == [{**base, "value": 1}, {**base, "value": 0}]
+    assert deleted == [f"feedback-{turn_id}"]
+    tracing.shutdown()
