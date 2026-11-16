@@ -6,7 +6,7 @@ A multi-user LLM chatbot built the way a production AI app is built: a **LangGra
 
 The goal is more than "a chat box". Over the roadmap below the agent grows tools, document Q&A (RAG), MCP servers, tracing, and a measured evaluation, because the engineering around the LLM is the point.
 
-> **Status:** Milestones 1 (foundation), 2 (agent tools), 3 (documents and RAG) and 4 (MCP) are complete. See the [roadmap](#roadmap).
+> **Status:** Milestones 1 (foundation), 2 (agent tools), 3 (documents and RAG), 4 (MCP) and 5 (observability) are complete. See the [roadmap](#roadmap).
 
 ## Screenshots
 
@@ -221,7 +221,7 @@ A tool whose name matches a built-in tool or an already-loaded MCP tool is skipp
 
 ## Observability
 
-Chat turns can be traced in [Langfuse](https://langfuse.com), a self-hosted trace viewer. It is optional: with no keys set, nothing is created and the app behaves exactly as before, and if Langfuse is configured but down, chat and feedback still work (failures are logged as warnings). `/api/health` reports `"langfuse": "off" | "ok" | "unavailable"`.
+Chat turns can be traced in [Langfuse](https://langfuse.com), a self-hosted trace viewer. It is optional: with no keys set, nothing is created and the app behaves exactly as before, and if Langfuse is configured but down, chat and feedback still work (failures are logged as warnings). `/api/health` reports `"langfuse": "off" | "ok" | "unavailable"`, the status checked once at startup (it does not change if Langfuse comes up later; traces still flow once it is up). The `prefetch` observation appears only when automatic retrieval is on.
 
 ```bash
 # Start Langfuse (an optional Compose profile; plain `docker compose up -d postgres` is unaffected)
@@ -229,7 +229,7 @@ docker compose --profile observability up -d
 ```
 
 1. Wait a minute or two for the first start, then open <http://localhost:3100> and sign in with `admin@chatbot.local` / `chatbot-admin-password`. The organization, the `chatbot` project and its API keys are created on first start.
-2. Put the keys in the backend's environment file (they are in [`.env.example`](.env.example)) and restart the backend:
+2. Put the keys in `backend/.env` (they are in [`.env.example`](.env.example)) and restart the backend:
 
 ```
 LANGFUSE_PUBLIC_KEY=pk-lf-chatbot-local
@@ -248,7 +248,7 @@ LANGFUSE_BASE_URL=http://localhost:3100
 
 **Feedback:** saved assistant replies have thumbs up/down buttons. A vote is stored in Postgres (`message_feedback`) and sent to Langfuse as a `user_feedback` score on that turn's trace; changing the vote updates the same score and clearing it deletes the score. Why it is stored locally is in [note 6](docs/learning/06-observability.md).
 
-**Langfuse Cloud instead:** skip the profile, create a project at <https://cloud.langfuse.com>, and set the same three variables (`LANGFUSE_BASE_URL=https://cloud.langfuse.com`, plus your own keys).
+**Langfuse Cloud instead:** skip the profile, create a project at <https://cloud.langfuse.com>, and set the same three variables (`LANGFUSE_BASE_URL=https://cloud.langfuse.com`, plus your own keys). With Langfuse Cloud, full prompts, including retrieved passages from users' uploaded documents, leave the machine.
 
 **Cost:** the profile runs six containers (Langfuse web and worker, plus its own Postgres, ClickHouse, Redis and MinIO), which is noticeable RAM on a laptop that is also running a local model; stop it with `docker compose --profile observability down` when you don't need it. Only the web UI is published, on `127.0.0.1:3100`. All its passwords and keys are local-development defaults; change them (see the `LANGFUSE_*` variables in [`docker-compose.yml`](docker-compose.yml)) before exposing it.
 

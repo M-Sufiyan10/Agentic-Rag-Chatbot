@@ -7,7 +7,7 @@ Note 5 ended with a question we could not answer from the browser: _why_ was thi
 Langfuse has three ideas, and they map onto what the app already does:
 
 - A **trace** is one end-to-end request. Here: one chat turn, from the user's message to the finished answer.
-- An **observation** is a step inside a trace, with its own input, output, start and end time. A _generation_ is the kind of observation that is an LLM call; it also records the model and token usage. A _span_ is any other step. Here the LangGraph nodes appear as observations: `prefetch`, `agent` (containing the generations) and `tools`.
+- An **observation** is a step inside a trace, with its own input, output, start and end time. A _generation_ is the kind of observation that is an LLM call; it also records the model and token usage. A _span_ is any other step. Here the LangGraph nodes appear as observations: `prefetch`, `agent` (containing the generations) and `tools`. The `prefetch` observation appears only when automatic retrieval is on.
 - A **score** is a named value attached to a trace (or an observation). Here: `user_feedback`, a boolean, 1 for thumbs up and 0 for thumbs down.
 
 Each trace also carries a **user id** and a **session id**. We set them to the user's id and the conversation's id, so Langfuse's Users and Sessions views group turns by person and by conversation. The trace is named `chat-turn` and tagged `chat`.
@@ -62,3 +62,6 @@ Two things to know when you read traces:
 
 - **Langfuse v4 changed the API.** The old `GET /api/public/traces/{id}` answers "not available ... in v4 events_only mode". Read observations with `GET /api/public/v2/observations?traceId=<id>&fields=core,basic,usage,model,io` and scores with `GET /api/public/v3/scores?traceId=<id>` (basic auth with the project keys), or just use the UI.
 - **The model name is not recorded** on the generation (`providedModelName` is empty), so Langfuse shows no model or cost column for Ollama calls. Token counts and latency are there.
+- **`/api/health` is a startup snapshot.** Its `langfuse` value is the status checked at startup; it does not change if Langfuse comes up later (traces still flow once it is up).
+- **Old turns and deleted conversations.** Turns from before M5 also show thumbs, but their scores attach to trace ids Langfuse never received. Deleting a conversation removes its feedback from Postgres but leaves its traces and scores in Langfuse.
+- **Clearing a vote flushes first.** The SDK queues scores and sends them in batches, so clearing a vote flushes the queue before deleting the score; otherwise a quick un-vote could delete nothing and the queued score would land afterwards.
