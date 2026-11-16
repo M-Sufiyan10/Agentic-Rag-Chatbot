@@ -89,12 +89,15 @@ class LangfuseTracing:
 
     async def delete_feedback(self, *, turn_id: str) -> None:
         try:
-            await asyncio.wait_for(
-                asyncio.to_thread(self._client.api.scores.delete, f"feedback-{turn_id}"),
-                self._timeout,
-            )
+            await asyncio.wait_for(self._flush_then_delete(f"feedback-{turn_id}"), self._timeout)
         except Exception as exc:
             logger.warning("Could not delete feedback score in Langfuse: %r", exc)
+
+    async def _flush_then_delete(self, score_id: str) -> None:
+        # create_score only queues; flush first so a quick un-vote cannot
+        # delete nothing and then have the queued create land afterwards.
+        await asyncio.to_thread(self._client.flush)
+        await asyncio.to_thread(self._client.api.scores.delete, score_id)
 
     def shutdown(self) -> None:
         try:

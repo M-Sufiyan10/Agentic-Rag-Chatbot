@@ -189,3 +189,16 @@ async def test_vote_change_advances_updated_at_and_keeps_created_at(
     assert row.created_at == created
     assert row.updated_at > updated
     assert row.positive is False
+
+
+async def test_turn_from_another_own_conversation_404s(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    alice = await register_user(client, email="alice@example.com")
+    _, turn_id = await _completed_turn(client, alice)
+    other_cid, _ = await _completed_turn(client, alice)
+    assert (
+        await client.put(_url(other_cid, turn_id), json={"value": "up"}, headers=alice)
+    ).status_code == 404
+    assert (await client.delete(_url(other_cid, turn_id), headers=alice)).status_code == 404
+    assert await _row_count(db_session) == 0

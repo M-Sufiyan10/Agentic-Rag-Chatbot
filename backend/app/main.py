@@ -1,6 +1,7 @@
 """FastAPI application factory."""
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
@@ -30,6 +31,8 @@ from app.documents.router import router as documents_router
 from app.documents.storage import LocalFileStorage
 from app.feedback.router import router as feedback_router
 from app.observability import Tracing, build_tracing
+
+logger = logging.getLogger(__name__)
 
 
 def create_app(
@@ -80,7 +83,16 @@ def create_app(
             tracing = build_tracing(settings)
             app.state.tracing = tracing
             if tracing is not None:
-                stack.push_async_callback(asyncio.to_thread, tracing.shutdown)
+
+                async def _shutdown_tracing(t: Tracing = tracing) -> None:
+                    try:
+                        await asyncio.wait_for(
+                            asyncio.to_thread(t.shutdown), settings.langfuse_timeout_seconds * 2
+                        )
+                    except TimeoutError:
+                        logger.warning("Langfuse shutdown timed out; exiting without flushing")
+
+                stack.push_async_callback(_shutdown_tracing)
                 await tracing.check()
             agent_tools = list(tools) if tools is not None else await build_agent_tools(app)
             saver: BaseCheckpointSaver[Any]

@@ -148,3 +148,21 @@ async def test_feedback_score_contract(
     assert scores == [{**base, "value": 1}, {**base, "value": 0}]
     assert deleted == [f"feedback-{turn_id}"]
     tracing.shutdown()
+
+
+async def test_delete_feedback_flushes_queued_scores_before_deleting(
+    test_settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tracing = LangfuseTracing(
+        _settings(test_settings, langfuse_base_url="http://127.0.0.1:9"),
+        span_exporter=InMemorySpanExporter(),
+    )
+    calls: list[str] = []
+    monkeypatch.setattr(tracing._client, "flush", lambda: calls.append("flush"))
+    monkeypatch.setattr(
+        tracing._client.api.scores, "delete", lambda score_id: calls.append(f"delete:{score_id}")
+    )
+    turn_id = str(uuid.uuid4())
+    await tracing.delete_feedback(turn_id=turn_id)
+    assert calls == ["flush", f"delete:feedback-{turn_id}"]
+    tracing.shutdown()
