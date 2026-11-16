@@ -1,5 +1,6 @@
 """API tests for thumbs feedback and the turn ids/feedback in the transcript."""
 
+import asyncio
 import uuid
 from typing import Any
 
@@ -158,3 +159,33 @@ async def test_deleting_conversation_deletes_feedback(
     await client.put(_url(cid, turn_id), json={"value": "up"}, headers=headers)
     assert (await client.delete(f"{CONVERSATIONS}/{cid}", headers=headers)).status_code == 204
     assert await _row_count(db_session) == 0
+
+
+async def test_concurrent_first_votes_leave_one_row(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    headers = await register_user(client)
+    cid, turn_id = await _completed_turn(client, headers)
+    results = await asyncio.gather(
+        client.put(_url(cid, turn_id), json={"value": "up"}, headers=headers),
+        client.put(_url(cid, turn_id), json={"value": "down"}, headers=headers),
+    )
+    assert [r.status_code for r in results] == [200, 200]
+    assert await _row_count(db_session) == 1
+
+
+async def test_vote_change_advances_updated_at_and_keeps_created_at(
+    client: httpx.AsyncClient, db_session: AsyncSession
+) -> None:
+    headers = await register_user(client)
+    cid, turn_id = await _completed_turn(client, headers)
+    await client.put(_url(cid, turn_id), json={"value": "up"}, headers=headers)
+    first = (await db_session.execute(select(MessageFeedback))).scalar_one()
+    created, updated = first.created_at, first.updated_at
+    await db_session.rollback()  # end the read transaction so the next read sees the change
+    await client.put(_url(cid, turn_id), json={"value": "down"}, headers=headers)
+    row = (await db_session.execute(select(MessageFeedback))).scalar_one()
+    await db_session.refresh(row)
+    assert row.created_at == created
+    assert row.updated_at > updated
+    assert row.positive is False

@@ -5,7 +5,8 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from langchain_core.runnables import RunnableConfig
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.deps import get_current_user
@@ -48,24 +49,25 @@ async def put_feedback(
     """Set (or change) the caller's vote; the first vote's time is kept."""
     await _require_completed_turn(session, graph, user, conversation_id, turn_id)
     positive = body.value == "up"
-    row = await session.scalar(
-        select(MessageFeedback).where(
-            MessageFeedback.conversation_id == conversation_id, MessageFeedback.turn_id == turn_id
-        )
-    )
-    if row is None:
-        row = MessageFeedback(
+    # One atomic statement: concurrent first votes cannot collide, the last write wins,
+    # and ``created_at`` (the first vote's time) is kept.
+    created_at = await session.scalar(
+        insert(MessageFeedback)
+        .values(
             conversation_id=conversation_id, user_id=user.id, turn_id=turn_id, positive=positive
         )
-        session.add(row)
-    else:
-        row.positive = positive
+        .on_conflict_do_update(
+            index_elements=[MessageFeedback.conversation_id, MessageFeedback.turn_id],
+            set_={"positive": positive, "updated_at": func.now()},
+        )
+        .returning(MessageFeedback.created_at)
+    )
     await session.commit()
-    await session.refresh(row)
+    assert created_at is not None
     tracing: Tracing | None = request.app.state.tracing
     if tracing is not None:
         await tracing.record_feedback(
-            turn_id=str(turn_id), positive=positive, first_voted_at=row.created_at
+            turn_id=str(turn_id), positive=positive, first_voted_at=created_at
         )
     return FeedbackOut(value=body.value)
 
