@@ -47,4 +47,18 @@ Langfuse v4 needs more than one container: web and worker, plus Postgres, ClickH
 
 ## 8. Live check
 
-Filled in after the live check.
+Run on 16 November 2026 against the real stack: `docker compose --profile observability up -d` (Langfuse **4.80.0**; every data store healthy, the headless-init keys reached the `chatbot` project), a backend started with the three `LANGFUSE_*` variables, the default 4B model, and a throwaway user with one uploaded document.
+
+| Check                                           | Result                                                                                                                                                                                                                                                                                                  |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/api/health`                                   | `"langfuse": "ok"`                                                                                                                                                                                                                                                                                      |
+| "What is the codename of the Zephyr-9 project?" | answered "BLUE HERON" from the document (87 s on CPU)                                                                                                                                                                                                                                                   |
+| Its trace                                       | root `chat-turn` → `prefetch` → `agent` → `ChatOllama` **GENERATION**; every observation carries the user id and the conversation id as the session; the generation shows **1,589 input / 17 output tokens**, its latency, and the exact prompt (system prompt plus the retrieved "BLUE HERON" passage) |
+| "Who won the 2026 FIFA World Cup?"              | trace shows `web_search` as a **TOOL** observation inside `prefetch` (2.4 s); the search engines were blocking that day, and the model said the search found nothing                                                                                                                                    |
+| Thumbs up, then down, on the first answer       | exactly **one** `user_feedback` score, id `feedback-<turn id>`, value `false`, `updatedAt` later than `createdAt`: the change overwrote it                                                                                                                                                              |
+| Langfuse web stopped, then chat + vote + clear  | answer streamed normally; feedback `200`, clear `204`, both instant; the backend logged the failed span export and score deletion as warnings                                                                                                                                                           |
+
+Two things to know when you read traces:
+
+- **Langfuse v4 changed the API.** The old `GET /api/public/traces/{id}` answers "not available ... in v4 events_only mode". Read observations with `GET /api/public/v2/observations?traceId=<id>&fields=core,basic,usage,model,io` and scores with `GET /api/public/v3/scores?traceId=<id>` (basic auth with the project keys), or just use the UI.
+- **The model name is not recorded** on the generation (`providedModelName` is empty), so Langfuse shows no model or cost column for Ollama calls. Token counts and latency are there.
