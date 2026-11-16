@@ -247,6 +247,55 @@ describe('ChatPane', () => {
     expect(await screen.findByText('Calculated')).toBeVisible()
   })
 
+  it('shows feedback buttons only on saved assistant messages with an id', async () => {
+    server.use(
+      http.get('*/api/conversations/c1/messages', () =>
+        HttpResponse.json([
+          { role: 'user', content: 'Q', id: null, feedback: null },
+          {
+            role: 'assistant',
+            content: 'Saved answer',
+            id: 't1',
+            feedback: 'up',
+          },
+          {
+            role: 'assistant',
+            content: 'No id answer',
+            id: null,
+            feedback: null,
+          },
+        ]),
+      ),
+    )
+    renderPane()
+    await screen.findByText('Saved answer')
+    expect(screen.getAllByRole('button', { name: 'Good response' })).toHaveLength(1)
+    expect(screen.getAllByRole('button', { name: 'Bad response' })).toHaveLength(1)
+  })
+
+  it('shows no feedback buttons on the live streaming bubble', async () => {
+    const gate = makeGate(1)
+    server.use(
+      http.get('*/api/conversations/c1/messages', () => HttpResponse.json([])),
+      http.post('*/api/conversations/c1/messages', () =>
+        sseResponse(
+          [
+            { event: 'token', data: { text: 'Streaming now' } },
+            { event: 'done', data: { content: 'Streaming now' } },
+          ],
+          10,
+          gate,
+        ),
+      ),
+    )
+    renderPane()
+    await typeAndSend('Hi')
+    await screen.findByText('Thinking…')
+    gate.release()
+    await screen.findByText('Streaming now')
+    expect(screen.queryByRole('button', { name: 'Good response' })).not.toBeInTheDocument()
+  })
+
   it('ignores malformed tool events', async () => {
     server.use(
       http.get('*/api/conversations/c1/messages', () => HttpResponse.json([])),

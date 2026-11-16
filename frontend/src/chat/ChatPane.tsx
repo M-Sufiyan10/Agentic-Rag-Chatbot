@@ -7,6 +7,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { useMessages } from './api'
 import MessageBubble, { AssistantAvatar } from './MessageBubble'
 import Citations from './Citations'
+import FeedbackButtons from './FeedbackButtons'
 import ToolChips from './ToolChips'
 import { useChatStream } from './useChatStream'
 
@@ -83,6 +84,13 @@ export default function ChatPane({ conversationId, initialMessage, onInitialMess
               <MessageBubble key={i} role={m.role} content={m.content}>
                 {m.tools?.length ? <ToolChips names={m.tools} /> : null}
                 {m.citations?.length ? <Citations items={m.citations} /> : null}
+                {m.role === 'assistant' && m.id ? (
+                  <FeedbackButtons
+                    conversationId={conversationId}
+                    turnId={m.id}
+                    value={m.feedback ?? null}
+                  />
+                ) : null}
               </MessageBubble>
             ))}
             {showPending && <MessageBubble role="user" content={pendingMessage} />}

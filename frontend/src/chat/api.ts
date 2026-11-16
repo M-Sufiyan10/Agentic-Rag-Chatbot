@@ -21,7 +21,12 @@ export type Citation = {
   snippet: string
 }
 
+export type FeedbackValue = 'up' | 'down'
+
 export type ChatMessage = {
+  /** Turn id of a saved assistant reply; null/absent for user messages. */
+  id?: string | null
+  feedback?: FeedbackValue | null
   role: 'user' | 'assistant'
   content: string
   tools?: string[]
@@ -52,6 +57,44 @@ export function deleteConversation(id: string): Promise<void> {
 
 export function getMessages(id: string): Promise<ChatMessage[]> {
   return apiJson<ChatMessage[]>(`/api/conversations/${id}/messages`)
+}
+
+export function setFeedback(
+  conversationId: string,
+  turnId: string,
+  value: FeedbackValue,
+): Promise<{ value: FeedbackValue }> {
+  return apiJson<{ value: FeedbackValue }>(
+    `/api/conversations/${conversationId}/messages/${turnId}/feedback`,
+    { method: 'PUT', body: JSON.stringify({ value }) },
+  )
+}
+
+export function clearFeedback(conversationId: string, turnId: string): Promise<void> {
+  return apiJson<void>(`/api/conversations/${conversationId}/messages/${turnId}/feedback`, {
+    method: 'DELETE',
+  })
+}
+
+/** Vote on a turn (`null` clears it). Updates the transcript cache optimistically. */
+export function useFeedback(conversationId: string) {
+  const queryClient = useQueryClient()
+  const key = messagesKey(conversationId)
+  return useMutation({
+    mutationFn: ({ turnId, value }: { turnId: string; value: FeedbackValue | null }): Promise<unknown> =>
+      value === null ? clearFeedback(conversationId, turnId) : setFeedback(conversationId, turnId, value),
+    onMutate: async ({ turnId, value }) => {
+      await queryClient.cancelQueries({ queryKey: key })
+      const previous = queryClient.getQueryData<ChatMessage[]>(key)
+      queryClient.setQueryData<ChatMessage[]>(key, (old) =>
+        old?.map((m) => (m.id === turnId ? { ...m, feedback: value } : m)),
+      )
+      return { previous }
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.previous) queryClient.setQueryData(key, context.previous)
+    },
+  })
 }
 
 export function useConversations() {
