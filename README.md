@@ -14,7 +14,7 @@ The goal is more than "a chat box". Over the roadmap below the agent grows tools
 
 _Screenshots and a demo GIF will be added in Milestone 7._
 
-## What works today (M1 to M4)
+## What works today (M1 to M5)
 
 - **Auth:** register and log in with email and password (argon2 hashes). Short-lived JWT access tokens, with a refresh token held in an httpOnly cookie.
 - **Conversations:** create, list, rename and delete. Every query is scoped to the signed-in user, and another user's conversation returns `404`.
@@ -24,6 +24,7 @@ _Screenshots and a demo GIF will be added in Milestone 7._
 - **Agent tools (M2):** the agent loops between the model and tools until it can answer. It has a safe `calculator` (an AST evaluator, never `eval`), `current_datetime`, and `web_search` (keyless metasearch via ddgs; see the caveat under Agent settings). The UI shows a live chip per tool call ("Searching the web...") and keeps them on the saved message. A max-rounds guard stops a looping model, long histories are trimmed for the model, a failed or abandoned reply is rolled back so the thread stays valid, and Markdown images in replies are shown as links instead of being fetched.
 - **Documents and RAG (M3):** upload PDF, DOCX, TXT or MD files in a Documents panel. They are ingested in the background (`processing`, then `ready` or `failed` with a reason), chunked, embedded with `nomic-embed-text` and stored in pgvector. The agent's `search_documents` tool searches only the signed-in user's documents (the user id comes from the server, never from the model), and answers show expandable source citations (file, chunk and snippet) that also survive a reload. Another user's document returns `404`.
 - **MCP tools (M4):** the agent also loads tools from MCP servers listed in `backend/mcp_servers.json`: a custom `mcp-utils` server (`get_weather`, `convert_units`, `convert_time`; its own service with a Dockerfile, compose entry and CI job) and the third-party `fetch` server for reading web pages (it refuses URLs whose host resolves to a private, loopback or link-local address, checked on every request and redirect). `fetch` is unreliable with the default 4B model: in the latest live check it was called for 1 of 4 public URLs, and otherwise the model answered that it cannot access websites. A server that is down at startup is skipped and shown as `unavailable` in `/api/health`; the app keeps working. See the [MCP section](#mcp).
+- **Observability (M5):** an optional Langfuse profile traces every chat turn (prefetch, model calls with token usage, tools) tagged with the user and conversation, and thumbs up/down on replies is saved and sent as a score. Off by default. See [Observability](#observability).
 - **Quality gates:** pytest (the LLM is always faked in unit tests), ruff, mypy strict, Vitest, oxlint and `tsc`, all run in GitHub Actions.
 
 ## Roadmap
@@ -36,7 +37,7 @@ The full design is in the [spec](docs/superpowers/specs/2026-11-10-agentic-chatb
 | M2  | Agent tools             | Tool loop; calculator, current time, web search; tool-status events and chips in the UI (**done**)    |
 | M3  | Documents & RAG         | Upload PDF/DOCX/TXT/MD, ingestion into pgvector, per-user document search, citations (**done**)       |
 | M4  | MCP                     | A custom FastMCP server plus a third-party one, loaded by the agent from config (**done**)            |
-| M5  | Observability           | Langfuse tracing tagged by user and conversation, thumbs feedback as scores                           |
+| M5  | Observability           | Langfuse tracing tagged by user and conversation, thumbs feedback as scores (**done**)                |
 | M6  | Evaluation              | Eval dataset and runner, LLM judge, tool-selection / retrieval / faithfulness metrics, 4B vs 8B model |
 | M7  | Production polish       | Dockerfiles, one-command `docker compose up`, rate limits, architecture diagram, screenshots          |
 
@@ -217,6 +218,39 @@ The config file is `backend/mcp_servers.json` (`MCP_CONFIG_PATH`, resolved relat
 | `MCP_UTILS_PORT`              | `8100`             | `mcp-utils` port                                           |
 
 A tool whose name matches a built-in tool or an already-loaded MCP tool is skipped with a warning; built-ins win. `GET /api/health` reports each server: `{"status": "ok", "mcp": {"utils": "ok", "fetch": "unavailable"}}`.
+
+## Observability
+
+Chat turns can be traced in [Langfuse](https://langfuse.com), a self-hosted trace viewer. It is optional: with no keys set, nothing is created and the app behaves exactly as before, and if Langfuse is configured but down, chat and feedback still work (failures are logged as warnings). `/api/health` reports `"langfuse": "off" | "ok" | "unavailable"`.
+
+```bash
+# Start Langfuse (an optional Compose profile; plain `docker compose up -d postgres` is unaffected)
+docker compose --profile observability up -d
+```
+
+1. Wait a minute or two for the first start, then open <http://localhost:3100> and sign in with `admin@chatbot.local` / `chatbot-admin-password`. The organization, the `chatbot` project and its API keys are created on first start.
+2. Put the keys in the backend's environment file (they are in [`.env.example`](.env.example)) and restart the backend:
+
+```
+LANGFUSE_PUBLIC_KEY=pk-lf-chatbot-local
+LANGFUSE_SECRET_KEY=sk-lf-chatbot-local
+LANGFUSE_BASE_URL=http://localhost:3100
+```
+
+| Variable                   | Default                 | Meaning                                                     |
+| -------------------------- | ----------------------- | ----------------------------------------------------------- |
+| `LANGFUSE_PUBLIC_KEY`      | unset                   | Tracing is on only when both keys are set (empty = unset)   |
+| `LANGFUSE_SECRET_KEY`      | unset                   | See above                                                   |
+| `LANGFUSE_BASE_URL`        | `http://localhost:3100` | Langfuse server                                             |
+| `LANGFUSE_TIMEOUT_SECONDS` | `5`                     | Most the startup reachability check may wait for the server |
+
+**What a trace shows:** each chat turn is one trace named `chat-turn`, tagged `chat`, with the user id and the conversation id (shown as the session), so you can filter by person or follow one conversation. Inside it are the LangGraph steps: `prefetch` (the automatic document and web retrieval from [note 5](docs/learning/05-auto-retrieval.md)), `agent` (the model call, with its prompt, answer, token usage and latency) and `tools` (each tool call with input and output).
+
+**Feedback:** saved assistant replies have thumbs up/down buttons. A vote is stored in Postgres (`message_feedback`) and sent to Langfuse as a `user_feedback` score on that turn's trace; changing the vote updates the same score and clearing it deletes the score. Why it is stored locally is in [note 6](docs/learning/06-observability.md).
+
+**Langfuse Cloud instead:** skip the profile, create a project at <https://cloud.langfuse.com>, and set the same three variables (`LANGFUSE_BASE_URL=https://cloud.langfuse.com`, plus your own keys).
+
+**Cost:** the profile runs six containers (Langfuse web and worker, plus its own Postgres, ClickHouse, Redis and MinIO), which is noticeable RAM on a laptop that is also running a local model; stop it with `docker compose --profile observability down` when you don't need it. Only the web UI is published, on `127.0.0.1:3100`. All its passwords and keys are local-development defaults; change them (see the `LANGFUSE_*` variables in [`docker-compose.yml`](docker-compose.yml)) before exposing it.
 
 ## Running the tests
 
