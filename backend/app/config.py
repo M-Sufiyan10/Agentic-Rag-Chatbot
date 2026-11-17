@@ -21,6 +21,12 @@ class Settings(BaseSettings):
     llm_provider: str = "ollama"
     llm_model: str = "qwen3:4b-instruct-2507-q4_K_M"
     llm_temperature: float = 0.2
+    # Reply length cap for hosted providers (Ollama uses its own context settings).
+    llm_max_tokens: int = 16000
+    # API key for a hosted provider. When unset, the provider's own environment variable
+    # (e.g. ANTHROPIC_API_KEY) is used. The settings file feeds Settings, not os.environ,
+    # so a key kept in that file has to come in through this setting.
+    llm_api_key: SecretStr | None = None
     llm_max_history_tokens: int = 6000
     agent_max_tool_rounds: int = 5
     ollama_base_url: str = "http://localhost:11434"

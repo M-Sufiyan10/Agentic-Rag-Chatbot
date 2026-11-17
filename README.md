@@ -115,16 +115,24 @@ LLM_TEMPERATURE=0.2
 OLLAMA_BASE_URL=http://localhost:11434      # only used when LLM_PROVIDER=ollama
 ```
 
-No application code changes, but each provider ships as its own LangChain package, and only `langchain-ollama` is installed by default. For example, for OpenAI:
+No application code changes. `langchain-ollama` and `langchain-anthropic` are installed; other providers ship as their own LangChain package (e.g. `uv add langchain-openai`).
+
+**Claude (hosted, fast).** On a CPU-only machine the local 4B model takes a minute or more per answer; a hosted model answers in seconds and is far more reliable at choosing tools. Create a key at https://console.anthropic.com, then in `backend/.env`:
 
 ```bash
-cd backend
-uv add langchain-openai
-export OPENAI_API_KEY=sk-...
-# then in .env:  LLM_PROVIDER=openai  and  LLM_MODEL=gpt-4o-mini
+LLM_PROVIDER=anthropic
+LLM_MODEL=claude-haiku-5-5     # fastest and cheapest; claude-sonnet-5-5 or claude-opus-5-5 for harder questions
+LLM_API_KEY=sk-ant-...
 ```
 
-The provider's API key is read from its usual environment variable (such as `OPENAI_API_KEY`) by the LangChain integration, not by this app's `Settings`. An unsupported provider, or a missing provider package, fails at startup with a clear error.
+Restart the backend. Notes:
+
+- **The key goes in `LLM_API_KEY`.** Values in `.env` are read into the app's settings, not exported to the environment, so a provider's own variable (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) only works when you `export` it in the shell that starts the backend.
+- **No sampling settings are sent to hosted models** (`LLM_TEMPERATURE` applies to Ollama only): current Claude models reject `temperature` with a 400. `LLM_MAX_TOKENS` (default `16000`) caps each reply.
+- **Privacy:** messages, and the passages retrieved from uploaded documents, are sent to the provider. Embeddings stay local (`nomic-embed-text`).
+- Switch back any time with `LLM_PROVIDER=ollama` and the Ollama model name.
+
+An unsupported provider, or a missing provider package, fails at startup with a clear error.
 
 ## Agent settings
 
