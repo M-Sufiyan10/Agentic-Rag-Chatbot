@@ -21,6 +21,16 @@ services:
     ports:
       - "127.0.0.1:8100:8100"
 
+  # Local-only test mail server: ANY username/password logs in (users are auto-created).
+  # Never point real accounts at it. Used by mcp-email tests and the dev email flow.
+  greenmail:
+    image: greenmail/standalone:2.1.3
+    environment:
+      GREENMAIL_OPTS: "-Dgreenmail.setup.test.smtp -Dgreenmail.setup.test.imap -Dgreenmail.auth.disabled=false -Dgreenmail.hostname=0.0.0.0 -Dgreenmail.verbose"
+    ports:
+      - "127.0.0.1:3025:3025"
+      - "127.0.0.1:3143:3143"
+
   # --- Optional Langfuse (observability) stack: docker compose --profile observability up -d
   # Every credential below is a LOCAL-DEVELOPMENT default. Override it (e.g. via .env)
   # before exposing any of these services beyond your own machine.
