@@ -247,9 +247,30 @@ def _summarize(conn: imaplib.IMAP4, uid: str) -> EmailSummary | None:
     )
 
 
+_MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
 def _imap_date(days: int) -> str:
+    # IMAP dates need English month names; strftime("%b") follows the process locale.
     d = datetime.now() - timedelta(days=days)
-    return d.strftime("%d-") + d.strftime("%b") + d.strftime("-%Y")
+    return f"{d.day:02d}-{_MONTHS[d.month - 1]}-{d.year:04d}"
+
+
+def is_plain_address(value: str) -> bool:
+    """True if value is exactly one bare address made of printable ASCII and no IMAP quoting."""
+    if not value or any(not ("!" <= c <= "~") or c in '"\\' for c in value):
+        return False
+    if email.utils.parseaddr(value) != ("", value):
+        return False
+    local, at, domain = value.rpartition("@")
+    return bool(at and local and domain) and "@" not in local and "," not in value
+
+
+def plain_address(value: str, what: str = "from_address") -> str:
+    """Returns the lowercased address, or raises MailError before it can reach an IMAP command."""
+    if not is_plain_address(value):
+        raise MailError(f"{what} must be a single plain email address.")
+    return value.lower()
 
 
 def _matching_uids(
@@ -274,7 +295,7 @@ def list_messages(
     since_days: int,
     limit: int,
 ) -> list[EmailSummary]:
-    target = from_address.lower() if from_address else None
+    target = plain_address(from_address) if from_address else None
     out: list[EmailSummary] = []
     with _Session(account) as conn:
         uids = _matching_uids(
@@ -304,7 +325,7 @@ def fetch_message(account: Account, uid: str) -> EmailMessage | None:
 
 
 def count_from(account: Account, address: str) -> int:
-    target = address.lower()
+    target = plain_address(address, "address")
     n = 0
     with _Session(account) as conn:
         for uid in _uid_search(conn, "FROM", f'"{target}"'):
@@ -323,6 +344,7 @@ __all__ = [
     "check_imap",
     "count_from",
     "fetch_message",
+    "is_plain_address",
     "list_messages",
     "parse_message",
 ]

@@ -2,6 +2,7 @@
 
 import asyncio
 import email.utils
+import re
 from os import getenv
 
 from mcp.server.mcpserver import MCPServer
@@ -21,6 +22,16 @@ UNTRUSTED_NOTE = (
 def _check(account: Account) -> None:
     allow = getenv("EMAIL_ALLOW_INSECURE_HOSTS", "").lower() == "true"
     check_account_safety(account, allow_insecure=allow)
+
+
+def _text(value: str) -> str:
+    """Escapes angle brackets so sender text can't close or open the <email> wrapper."""
+    return value.replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _line(value: str) -> str:
+    """Escapes a header-type field and collapses its line breaks to spaces."""
+    return re.sub(r"[\r\n]+", " ", _text(value))
 
 
 def _clamp(value: int, low: int, high: int) -> int:
@@ -63,6 +74,8 @@ async def list_emails(
 
     limit is 1-25 (default 10); since_days is 1-90 (default 7).
     """
+    if from_address and not mailbox.is_plain_address(from_address):
+        return "Error: from_address must be a single plain email address."
     try:
         _check(account)
         items = await asyncio.to_thread(
@@ -79,12 +92,12 @@ async def list_emails(
         return "No emails match."
     blocks = [
         "<email>\n"
-        f"uid: {m.uid}\n"
-        f"From: {m.from_name} <{m.from_address}>\n"
-        f"Date: {m.date}\n"
-        f"Subject: {m.subject}\n"
+        f"uid: {_line(m.uid)}\n"
+        f"From: {_line(m.from_name)} <{_line(m.from_address)}>\n"
+        f"Date: {_line(m.date)}\n"
+        f"Subject: {_line(m.subject)}\n"
         f"Unread: {'yes' if m.unread else 'no'}\n"
-        f"Snippet: {m.snippet}\n"
+        f"Snippet: {_line(m.snippet)}\n"
         "</email>"
         for m in items
     ]
@@ -101,16 +114,16 @@ async def read_email(account: Account, uid: str) -> str:
         return f"Error: {exc}"
     if m is None:
         return f"No email with uid {uid} in the inbox."
-    attachments = ", ".join(m.attachments) if m.attachments else "none"
+    attachments = ", ".join(_line(a) for a in m.attachments) if m.attachments else "none"
     return (
         f"{UNTRUSTED_NOTE}\n\n<email>\n"
-        f"uid: {m.uid}\n"
-        f"From: {m.from_name} <{m.from_address}>\n"
-        f"To: {', '.join(m.to)}\n"
-        f"Date: {m.date}\n"
-        f"Subject: {m.subject}\n"
+        f"uid: {_line(m.uid)}\n"
+        f"From: {_line(m.from_name)} <{_line(m.from_address)}>\n"
+        f"To: {_line(', '.join(m.to))}\n"
+        f"Date: {_line(m.date)}\n"
+        f"Subject: {_line(m.subject)}\n"
         f"Attachments: {attachments}\n\n"
-        f"{m.body}\n"
+        f"{_text(m.body)}\n"
         "</email>"
     )
 
@@ -121,6 +134,9 @@ async def is_listed_sender(account: Account, address: str) -> dict[str, object]:
 
     Replies may only go to listed senders.
     """
+    if not mailbox.is_plain_address(address):
+        error = "address must be a single plain email address."
+        return {"listed": False, "count": 0, "error": error}
     try:
         _check(account)
         count = await asyncio.to_thread(mailbox.count_from, account, address)
