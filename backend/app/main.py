@@ -29,6 +29,8 @@ from app.documents.embeddings import build_embeddings
 from app.documents.ingestion import fail_interrupted_documents
 from app.documents.router import router as documents_router
 from app.documents.storage import LocalFileStorage
+from app.email.client import EmailServerClient
+from app.email.router import router as email_router
 from app.feedback.router import router as feedback_router
 from app.observability import Tracing, build_tracing
 
@@ -42,12 +44,15 @@ def create_app(
     checkpointer: BaseCheckpointSaver[Any] | None = None,
     tools: Sequence[BaseTool] | None = None,
     embeddings: Embeddings | None = None,
+    email_client: EmailServerClient | None = None,
 ) -> FastAPI:
     """Build the app.
 
     ``chat_model``, ``checkpointer``, ``tools`` and ``embeddings`` are a test seam: when given, they
     are used instead of the configured LLM, the Postgres checkpointer and the
     built-in tools plus the MCP servers' tools (``tools=[]`` disables tools and MCP).
+    ``email_client`` likewise replaces the email MCP client that is otherwise built when
+    email is enabled.
     """
     settings = settings or get_settings()
 
@@ -78,6 +83,19 @@ def create_app(
         app.state.storage = LocalFileStorage(settings.upload_dir)
         app.state.embeddings = embeddings if embeddings is not None else build_embeddings(settings)
         await fail_interrupted_documents(app.state.sessionmaker)
+        app.state.email_client = email_client
+        if app.state.email_client is None and settings.email_enabled:
+            assert settings.mcp_email_token is not None
+            app.state.email_client = EmailServerClient(
+                settings.mcp_email_url,
+                settings.mcp_email_token.get_secret_value(),
+                settings.email_tool_timeout_seconds,
+            )
+        if app.state.email_client is None:
+            app.state.email_status = "off"
+        else:
+            ok = await app.state.email_client.ping()
+            app.state.email_status = "ok" if ok else "unavailable"
         async with AsyncExitStack() as stack:
             stack.push_async_callback(engine.dispose)
             tracing = build_tracing(settings)
@@ -127,6 +145,8 @@ def create_app(
     app.state.settings = settings
     app.state.mcp_servers = {}  # server name -> "ok" | "unavailable"; set at startup
     app.state.tracing = None  # Tracing | None; set at startup
+    app.state.email_client = None  # EmailServerClient | None; set at startup
+    app.state.email_status = "off"  # "off" | "ok" | "unavailable"; set at startup
 
     app.add_middleware(
         CORSMiddleware,
@@ -145,6 +165,7 @@ def create_app(
             "status": "ok",
             "mcp": app.state.mcp_servers,
             "langfuse": "off" if tracing is None else tracing.status,
+            "email": app.state.email_status,
         }
 
     api.include_router(auth_router)
@@ -152,5 +173,6 @@ def create_app(
     api.include_router(chat_router)
     api.include_router(documents_router)
     api.include_router(feedback_router)
+    api.include_router(email_router)
     app.include_router(api)
     return app
