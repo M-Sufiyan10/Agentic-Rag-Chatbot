@@ -21,6 +21,15 @@ services:
     ports:
       - "127.0.0.1:8100:8100"
 
+  mcp-email:
+    build: ./mcp-email
+    ports:
+      - "127.0.0.1:8101:8101"
+    environment:
+      MCP_EMAIL_TOKEN: ${MCP_EMAIL_TOKEN:-dev-email-token} # local-dev default; must match the backend's MCP_EMAIL_TOKEN
+      EMAIL_ALLOW_INSECURE_HOSTS: "true" # dev only: lets the GreenMail preset work
+    depends_on: [greenmail]
+
   # Local-only test mail server: ANY username/password logs in (users are auto-created).
   # Never point real accounts at it. Used by mcp-email tests and the dev email flow.
   greenmail:

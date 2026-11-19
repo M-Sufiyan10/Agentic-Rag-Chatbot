@@ -7,6 +7,7 @@ dependencies = [
     "mcp",
     "uvicorn",
     "pydantic",
+    "starlette>=1.10.0",
 ]
 
 [dependency-groups]
@@ -15,6 +16,7 @@ dev = [
     "pytest-asyncio",
     "ruff",
     "mypy",
+    "httpx>=0.28.1",
 ]
 
 [tool.uv]
