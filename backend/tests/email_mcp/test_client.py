@@ -2,8 +2,9 @@ import os
 import socket
 
 import pytest
+from mcp.types import CallToolResult, TextContent
 
-from app.email.client import EmailServerClient, EmailServerError
+from app.email.client import EmailServerClient, EmailServerError, _result_value
 
 URL = "http://127.0.0.1:8101/mcp"
 TOKEN_VAR = "MCP_EMAIL_TEST_TOKEN"
@@ -57,3 +58,27 @@ async def test_timeout_raises_email_server_error() -> None:
     with pytest.raises(EmailServerError) as info:
         await client.call("check_connection", {"account": {"password": "hunter2-secret"}})
     assert "hunter2-secret" not in str(info.value)
+
+
+def _result(structured: dict[str, object] | None, text: str = "") -> CallToolResult:
+    return CallToolResult(
+        content=[TextContent(type="text", text=text)], structuredContent=structured
+    )
+
+
+def test_result_value_unwraps_primitive_result() -> None:
+    assert _result_value(_result({"result": "1. From a"}, "1. From a")) == "1. From a"
+
+
+def test_result_value_keeps_dicts_and_text() -> None:
+    assert _result_value(_result({"listed": True, "count": 1})) == {"listed": True, "count": 1}
+    assert _result_value(_result({"result": "x", "other": 1})) == {"result": "x", "other": 1}
+    assert _result_value(_result(None, "plain")) == "plain"
+
+
+@needs_server
+async def test_list_emails_returns_plain_text_against_real_server() -> None:
+    client = EmailServerClient(URL, os.getenv(TOKEN_VAR, ""), timeout=20)
+    result = await client.call("list_emails", {"account": GREENMAIL})
+    assert isinstance(result, str)
+    assert not result.startswith("{'result'")

@@ -9,7 +9,21 @@ import asyncio
 from typing import Any
 
 from langchain_mcp_adapters.client import MultiServerMCPClient
-from mcp.types import TextContent
+from mcp.types import CallToolResult, TextContent
+
+
+def _result_value(result: CallToolResult) -> Any:
+    """The tool's value: structured content (unwrapping FastMCP's ``{"result": x}``), else text.
+
+    MCP wraps a primitive return (``-> str``) as ``{"result": value}``; dict-returning
+    tools come back as their own dict.
+    """
+    structured = result.structuredContent
+    if structured is not None:
+        if isinstance(structured, dict) and set(structured) == {"result"}:
+            return structured["result"]
+        return structured
+    return "\n".join(c.text for c in result.content if isinstance(c, TextContent))
 
 
 class EmailServerError(Exception):
@@ -38,10 +52,7 @@ class EmailServerClient:
             texts = [c.text for c in result.content if isinstance(c, TextContent)]
             if result.isError:
                 raise EmailServerError(f"Email server error from {tool}: {' '.join(texts)[:300]}")
-            if result.structuredContent is not None:
-                return result.structuredContent
-            text = "\n".join(texts)
-            return text
+            return _result_value(result)
 
         try:
             return await asyncio.wait_for(run(), self._timeout)
