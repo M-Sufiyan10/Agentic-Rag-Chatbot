@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from email.message import EmailMessage as PyMessage
+from email.message import MIMEPart
 from html.parser import HTMLParser
 
 from .account import Account
@@ -15,6 +16,7 @@ TIMEOUT = 20
 MAX_BODY = 8000
 TRUNC_NOTE = "\n[... message truncated ...]"
 SNIPPET_LEN = 200
+SNIPPET_FETCH = 4000  # bytes of body fetched per listed message
 
 
 @dataclass
@@ -84,11 +86,20 @@ def _sender(msg: PyMessage) -> tuple[str, str]:
 def _body_text(msg: PyMessage) -> str:
     part = msg.get_body(preferencelist=("plain",))
     if part is not None:
-        return str(part.get_content())
+        return _content(part)
     part = msg.get_body(preferencelist=("html",))
     if part is not None:
-        return _html_to_text(str(part.get_content()))
+        return _html_to_text(_content(part))
     return ""
+
+
+def _content(part: MIMEPart) -> str:
+    try:
+        return str(part.get_content())
+    except (LookupError, UnicodeError, ValueError):
+        # Unknown/invalid charset: decode leniently instead of failing the whole listing.
+        payload = part.get_payload(decode=True)
+        return payload.decode("utf-8", "replace") if isinstance(payload, bytes) else ""
 
 
 def parse_message(uid: str, raw: bytes, *, unread: bool = False) -> EmailMessage:
@@ -170,7 +181,7 @@ class _Session:
             self.conn.logout()
         except Exception:  # noqa: BLE001
             _quiet_close(self.conn)
-        if isinstance(exc, (OSError, imaplib.IMAP4.error)) and not isinstance(exc, MailError):
+        if isinstance(exc, (OSError, imaplib.IMAP4.error, LookupError, UnicodeError, ValueError)):
             raise MailError(f"IMAP error: {exc}") from exc
 
 
@@ -208,11 +219,23 @@ def _snippet(body: str) -> str:
 
 
 def _summarize(conn: imaplib.IMAP4, uid: str) -> EmailSummary | None:
-    got = _fetch_parts(conn, uid, "(FLAGS BODY.PEEK[])")
-    if got is None:
+    typ, data = conn.uid(
+        "FETCH", uid, f"(FLAGS BODY.PEEK[HEADER] BODY.PEEK[TEXT]<0.{SNIPPET_FETCH}>)"
+    )
+    if typ != "OK" or not data:
         return None
-    meta, raw = got
-    m = parse_message(uid, raw)
+    tuples = [d for d in data if isinstance(d, tuple)]
+    if not tuples:
+        return None
+    meta = b" ".join([t[0] for t in tuples] + [d for d in data if isinstance(d, bytes)])
+    header = b""
+    text = b""
+    for line, literal in tuples:  # servers may return the parts in either order
+        if b"BODY[HEADER]" in line.upper():
+            header = literal
+        elif b"BODY[TEXT]" in line.upper():
+            text = literal
+    m = parse_message(uid, header.rstrip(b"\r\n") + b"\r\n\r\n" + text)
     return EmailSummary(
         uid=uid,
         from_name=m.from_name,

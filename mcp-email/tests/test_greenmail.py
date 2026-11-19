@@ -28,7 +28,7 @@ def rnd() -> str:
     return f"s{uuid.uuid4().hex[:8]}@example.com"
 
 
-def test_check_connection_ok_and_wrong_password(greenmail_account: Factory) -> None:
+def test_check_connection_ok(greenmail_account: Factory) -> None:
     acct = greenmail_account()
     check_imap(acct)
     check_smtp(acct)

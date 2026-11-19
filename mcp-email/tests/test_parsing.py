@@ -56,3 +56,9 @@ def test_attachments_listed_by_name() -> None:
     assert m.attachments == ["invoice.pdf"]
     assert "SEVMTE9" not in m.body
     assert "see attached" in m.body
+
+
+def test_unknown_charset_yields_readable_text() -> None:
+    h = H + "\r\nContent-Type: text/plain; charset=bogus-9"
+    m = parse_message("1", raw(h, "plain words"))
+    assert "plain words" in m.body
