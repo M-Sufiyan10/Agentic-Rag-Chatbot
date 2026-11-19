@@ -137,14 +137,61 @@ async def test_put_without_password_keeps_stored_one(
     assert (await ec.put(ACCOUNT, json=BODY, headers=headers)).status_code == 200
     (before,) = await _rows(db_session)
     stored = before.password_encrypted
-    body = {k: v for k, v in BODY.items() if k != "password"} | {"imap_host": "imap2.example.com"}
+    body = {k: v for k, v in BODY.items() if k != "password"}
     r = await ec.put(ACCOUNT, json=body, headers=headers)
     assert r.status_code == 200, r.text
     assert fake.calls[-1][1]["account"]["password"] == "pw-plain"
     db_session.expire_all()
     (after,) = await _rows(db_session)
-    assert after.imap_host == "imap2.example.com"
     assert after.password_encrypted == stored
+
+
+CHANGED_NEEDS_PASSWORD = "Enter the password again to change the mailbox connection details."
+CHANGED_DETAILS = [
+    ("address", "thief@evil.example"),
+    ("username", "someone-else"),
+    ("imap_host", "imap.evil.example"),
+    ("imap_port", 1993),
+    ("smtp_host", "smtp.evil.example"),
+    ("smtp_port", 2525),
+]
+
+
+@pytest.mark.parametrize(("field", "value"), CHANGED_DETAILS)
+@pytest.mark.parametrize("path", [ACCOUNT, f"{ACCOUNT}/test"])
+async def test_stored_password_not_reused_for_changed_connection(
+    ec: httpx.AsyncClient,
+    fake: FakeEmailClient,
+    db_session: AsyncSession,
+    path: str,
+    field: str,
+    value: Any,
+) -> None:
+    headers = await register_user(ec)
+    assert (await ec.put(ACCOUNT, json=BODY, headers=headers)).status_code == 200
+    calls_before = len(fake.calls)
+    body = {k: v for k, v in BODY.items() if k != "password"} | {field: value}
+    if path == ACCOUNT:
+        r = await ec.put(path, json=body, headers=headers)
+    else:
+        r = await ec.post(path, json=body, headers=headers)
+    assert r.status_code == 422
+    assert r.json()["detail"] == CHANGED_NEEDS_PASSWORD
+    assert len(fake.calls) == calls_before
+    db_session.expire_all()
+    (row,) = await _rows(db_session)
+    assert getattr(row, field) == BODY[field]
+
+
+async def test_changed_connection_with_new_password_is_saved(
+    ec: httpx.AsyncClient, fake: FakeEmailClient, db_session: AsyncSession
+) -> None:
+    headers = await register_user(ec)
+    assert (await ec.put(ACCOUNT, json=BODY, headers=headers)).status_code == 200
+    body = BODY | {"imap_host": "imap2.example.com", "password": "pw-new"}
+    r = await ec.put(ACCOUNT, json=body, headers=headers)
+    assert r.status_code == 200, r.text
+    assert fake.calls[-1][1]["account"]["password"] == "pw-new"
 
 
 async def test_put_without_password_and_no_account_422(ec: httpx.AsyncClient) -> None:

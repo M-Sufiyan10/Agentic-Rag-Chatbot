@@ -221,6 +221,50 @@ async def test_draft_invalid_address(
     assert fake.calls == []
 
 
+@pytest.mark.parametrize(
+    "bad",
+    ['x"\r\nA1 SELECT INBOX\r\nA2 EXPUNGE', "a@b.com\nc@d.com", "Name <a@b.com>", "nope"],
+)
+async def test_list_emails_invalid_from_address_refused(
+    sm: async_sessionmaker[AsyncSession], settings: Settings, bad: str
+) -> None:
+    user_id, _ = await _user(sm)
+    fake = FakeEmailClient({"list_emails": "x"})
+    out = await _tools(sm, fake, settings)["list_emails"].ainvoke(
+        {"from_address": bad}, config=_cfg(user_id)
+    )
+    assert out == f"Error: from_address {bad!r} is not a valid email address."
+    assert fake.calls == []
+
+
+async def test_draft_subject_line_breaks_collapsed(
+    sm: async_sessionmaker[AsyncSession], settings: Settings
+) -> None:
+    user_id, conv = await _user(sm)
+    fake = FakeEmailClient({"is_listed_sender": {"listed": True, "count": 1}})
+    out = await _tools(sm, fake, settings)["draft_email"].ainvoke(
+        {"to": "friend@example.com", "subject": " Hello\r\nBcc: x@y.com\t", "body": "b"},
+        config=_cfg(user_id, conv, uuid.uuid4()),
+    )
+    assert out == DRAFTED
+    (draft,) = await _drafts(sm)
+    assert draft.subject == "Hello Bcc: x@y.com"
+
+
+async def test_draft_empty_subject_refused(
+    sm: async_sessionmaker[AsyncSession], settings: Settings
+) -> None:
+    user_id, conv = await _user(sm)
+    fake = FakeEmailClient({"is_listed_sender": {"listed": True, "count": 1}})
+    out = await _tools(sm, fake, settings)["draft_email"].ainvoke(
+        {"to": "friend@example.com", "subject": " \r\n ", "body": "b"},
+        config=_cfg(user_id, conv, uuid.uuid4()),
+    )
+    assert out == "Not drafted: the subject is empty."
+    assert await _drafts(sm) == []
+    assert fake.calls == []
+
+
 class Recorder(BaseCallbackHandler):
     def __init__(self) -> None:
         self.seen: list[str] = []

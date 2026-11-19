@@ -332,6 +332,42 @@ async def test_old_sends_do_not_count(
     assert r.status_code == 200
 
 
+@pytest.mark.parametrize("max_sends", [1])
+async def test_in_flight_send_counts_toward_rate_limit(
+    ec: httpx.AsyncClient, fake: FakeEmailClient, db_session: AsyncSession
+) -> None:
+    headers, cid, uid, did = await _setup(ec, db_session)
+    await _add_draft(db_session, uid, cid, str(uuid.uuid4()), status="sending")
+    r = await ec.post(_send(did), headers=headers)
+    assert r.status_code == 429
+    assert fake.calls == []
+
+
+async def test_send_non_dict_reply_marks_failed(
+    ec: httpx.AsyncClient, fake: FakeEmailClient, db_session: AsyncSession
+) -> None:
+    fake.results["send_email"] = "Error: something odd"
+    headers, _, _, did = await _setup(ec, db_session)
+    r = await ec.post(_send(did), headers=headers)
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "failed"
+    assert r.json()["error"] == "The email service returned an unexpected reply."
+
+
+async def test_send_unexpected_exception_never_leaves_sending(
+    ec: httpx.AsyncClient, fake: FakeEmailClient, db_session: AsyncSession
+) -> None:
+    fake.results["send_email"] = RuntimeError("boom")
+    headers, _, _, did = await _setup(ec, db_session)
+    r = await ec.post(_send(did), headers=headers)
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "failed"
+    assert r.json()["error"] == "Sending failed unexpectedly."
+    db_session.expire_all()
+    draft = await db_session.get(EmailDraft, did)
+    assert draft is not None and draft.status == "failed"
+
+
 async def test_cancel_pending(ec: httpx.AsyncClient, db_session: AsyncSession) -> None:
     headers, _, _, did = await _setup(ec, db_session)
     r = await ec.post(f"/api/email/drafts/{did}/cancel", headers=headers)

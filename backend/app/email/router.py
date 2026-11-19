@@ -1,5 +1,6 @@
 """Connect, test and disconnect the caller's mailbox."""
 
+import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
@@ -8,7 +9,7 @@ from cryptography.fernet import InvalidToken
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from langchain_core.runnables import RunnableConfig
 from pydantic import SecretStr
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.deps import get_current_user
@@ -27,6 +28,8 @@ from app.email.service import account_payload, get_account
 
 router = APIRouter(prefix="/email", tags=["email"], dependencies=[Depends(get_current_user)])
 conversation_router = APIRouter(prefix="/conversations", tags=["email"])
+
+logger = logging.getLogger(__name__)
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 CurrentUser = Annotated[User, Depends(get_current_user)]
@@ -50,11 +53,20 @@ def _out(account: EmailAccount) -> EmailAccountOut:
     )
 
 
+# The stored password is only ever sent back to the server/login it was saved for.
+_CONNECTION_FIELDS = ("address", "username", "imap_host", "imap_port", "smtp_host", "smtp_port")
+
+
 def _resolve_password(body: EmailAccountIn, stored: EmailAccount | None, key: SecretStr) -> str:
     if body.password is not None:
         return body.password
     if stored is None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "A password is required.")
+    if any(getattr(body, f) != getattr(stored, f) for f in _CONNECTION_FIELDS):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "Enter the password again to change the mailbox connection details.",
+        )
     try:
         return decrypt_password(stored.password_encrypted, key)
     except InvalidToken:
@@ -147,6 +159,8 @@ async def delete_email_account(
 _ALREADY_DONE = "This draft was already sent or cancelled."
 _SERVICE_DOWN = "The email service is unavailable."
 _BAD_PASSWORD = "The saved mailbox password can't be read; re-enter it in Email settings."
+_UNEXPECTED_REPLY = "The email service returned an unexpected reply."
+_UNEXPECTED_ERROR = "Sending failed unexpectedly."
 
 
 async def _completed_turns(graph: Graph, conversation_id: uuid.UUID) -> set[str]:
@@ -169,8 +183,13 @@ async def _owned_draft(
     return draft
 
 
-async def _set_status(session: AsyncSession, draft_id: uuid.UUID, **values: Any) -> None:
-    await session.execute(update(EmailDraft).where(EmailDraft.id == draft_id).values(**values))
+async def _finish(session: AsyncSession, draft_id: uuid.UUID, **values: Any) -> None:
+    """Moves a claimed (``sending``) draft to its final status."""
+    await session.execute(
+        update(EmailDraft)
+        .where(EmailDraft.id == draft_id, EmailDraft.status == "sending")
+        .values(**values)
+    )
     await session.commit()
 
 
@@ -207,8 +226,10 @@ async def send_email_draft(
         .select_from(EmailDraft)
         .where(
             EmailDraft.user_id == user.id,
-            EmailDraft.status == "sent",
-            EmailDraft.sent_at >= since,
+            or_(
+                (EmailDraft.status == "sent") & (EmailDraft.sent_at >= since),
+                (EmailDraft.status == "sending") & (EmailDraft.created_at >= since),
+            ),
         )
     )
     if (sent_recently or 0) >= settings.email_max_sends_per_hour:
@@ -228,16 +249,36 @@ async def send_email_draft(
     if claimed is None:
         raise HTTPException(status.HTTP_409_CONFLICT, _ALREADY_DONE)
 
+    try:
+        await _deliver(session, client, key, user, draft)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        # Type only: the exception's arguments may carry the account payload.
+        logger.error("Sending email draft %s failed: %s", draft_id, type(exc).__name__)
+        await session.rollback()
+        await _finish(session, draft_id, status="failed", error=_UNEXPECTED_ERROR)
+    await session.refresh(draft)
+    return draft
+
+
+async def _deliver(
+    session: AsyncSession,
+    client: EmailServerClient,
+    key: SecretStr,
+    user: User,
+    draft: EmailDraft,
+) -> None:
+    """Sends a claimed draft and records the outcome; never reverts it to ``pending``."""
     account = await get_account(session, user.id)
     if account is None:
-        await _set_status(session, draft_id, status="cancelled")
+        await _finish(session, draft.id, status="cancelled")
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No mailbox connected")
     try:
         payload = account_payload(account, key)
     except InvalidToken:
-        await _set_status(session, draft_id, status="failed", error=_BAD_PASSWORD)
-        await session.refresh(draft)
-        return draft
+        await _finish(session, draft.id, status="failed", error=_BAD_PASSWORD)
+        return
     arguments = {
         "account": payload,
         "to": draft.to_address,
@@ -248,18 +289,15 @@ async def send_email_draft(
     try:
         result = await client.call("send_email", arguments)
     except EmailServerError:
-        await _set_status(session, draft_id, status="failed", error=_SERVICE_DOWN)
+        await _finish(session, draft.id, status="failed", error=_SERVICE_DOWN)
+        return
+    if not isinstance(result, dict):
+        await _finish(session, draft.id, status="failed", error=_UNEXPECTED_REPLY)
+    elif result.get("sent"):
+        await _finish(session, draft.id, status="sent", sent_at=datetime.now(UTC), error=None)
     else:
-        if result.get("sent"):
-            await _set_status(
-                session, draft_id, status="sent", sent_at=datetime.now(UTC), error=None
-            )
-        else:
-            await _set_status(
-                session, draft_id, status="failed", error=result.get("error") or "Sending failed."
-            )
-    await session.refresh(draft)
-    return draft
+        error = result.get("error") or "Sending failed."
+        await _finish(session, draft.id, status="failed", error=str(error))
 
 
 @router.post("/drafts/{draft_id}/cancel", response_model=EmailDraftOut)

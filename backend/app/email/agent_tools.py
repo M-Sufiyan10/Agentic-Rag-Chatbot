@@ -8,6 +8,7 @@ config or callbacks, so tracing never records it.
 """
 
 import logging
+import re
 import uuid
 from typing import Any
 
@@ -34,6 +35,11 @@ DRAFTED = "Draft saved. It has NOT been sent: the user must review it and click 
 BAD_PASSWORD = (
     "The saved mailbox password can't be read. Ask the user to re-enter it in Email settings."
 )
+
+
+def _one_line(value: str) -> str:
+    """Collapses line breaks and other control characters to single spaces."""
+    return re.sub(r"\s*[\x00-\x1f\x7f]+\s*", " ", value).strip()
 
 
 def _uuid(value: Any) -> uuid.UUID | None:
@@ -90,6 +96,11 @@ def make_email_tools(
 
         Use for questions about their email, to summarize it, or to find an email.
         """
+        if from_address:
+            try:
+                from_address = validate_email(from_address, check_deliverability=False).normalized
+            except EmailNotValidError:
+                return f"Error: from_address {from_address!r} is not a valid email address."
         result, message = await call(
             config,
             "list_emails",
@@ -126,6 +137,9 @@ def make_email_tools(
         conversation_id = _uuid(configurable.get("thread_id"))
         if user_id is None or turn_id is None or conversation_id is None:
             return UNAVAILABLE
+        subject = _one_line(subject)
+        if not subject:
+            return "Not drafted: the subject is empty."
         try:
             address = validate_email(to, check_deliverability=False).normalized
         except EmailNotValidError:
