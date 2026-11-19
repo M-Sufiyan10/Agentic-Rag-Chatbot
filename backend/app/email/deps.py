@@ -5,6 +5,7 @@ from typing import Annotated
 from fastapi import Depends, HTTPException, Request, status
 from pydantic import SecretStr
 
+from app.config import Settings
 from app.email.client import EmailServerClient
 
 
@@ -15,6 +16,11 @@ def get_email_client(request: Request) -> EmailServerClient:
             status.HTTP_503_SERVICE_UNAVAILABLE, "Email is not configured on this server."
         )
     return client
+
+
+def get_settings(request: Request) -> Settings:
+    settings: Settings = request.app.state.settings
+    return settings
 
 
 def get_email_key(request: Request) -> SecretStr:

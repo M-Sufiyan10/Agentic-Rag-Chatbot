@@ -1,8 +1,10 @@
 """Request/response models for the mailbox connection API."""
 
+import uuid
+from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 Security = Literal["ssl", "starttls", "none"]
 
@@ -31,3 +33,18 @@ class EmailAccountOut(_AccountFields):
 class ConnectionResult(BaseModel):
     ok: bool
     error: str | None = None
+
+
+class EmailDraftOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    turn_id: uuid.UUID
+    to_address: str
+    subject: str
+    body: str
+    reply_to_uid: str | None
+    status: str
+    error: str | None
+    created_at: datetime
+    sent_at: datetime | None

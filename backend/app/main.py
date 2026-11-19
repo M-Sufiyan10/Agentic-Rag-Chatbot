@@ -31,6 +31,7 @@ from app.documents.router import router as documents_router
 from app.documents.storage import LocalFileStorage
 from app.email.agent_tools import make_email_tools
 from app.email.client import EmailServerClient
+from app.email.router import conversation_router as email_conversation_router
 from app.email.router import router as email_router
 from app.feedback.router import router as feedback_router
 from app.observability import Tracing, build_tracing
@@ -186,5 +187,6 @@ def create_app(
     api.include_router(documents_router)
     api.include_router(feedback_router)
     api.include_router(email_router)
+    api.include_router(email_conversation_router)
     app.include_router(api)
     return app
