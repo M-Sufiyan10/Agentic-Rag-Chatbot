@@ -1,5 +1,5 @@
-import { useRef, useState } from "react";
-import type { FormEvent } from "react";
+import { useRef, useState } from 'react'
+import type { FormEvent } from 'react'
 import {
   FileText,
   Mail,
@@ -9,9 +9,9 @@ import {
   Pencil,
   SquarePen,
   Trash2,
-} from "lucide-react";
-import { Link, useNavigate } from "react-router";
-import { useAuth } from "@/auth/AuthProvider";
+} from 'lucide-react'
+import { Link, useNavigate } from 'react-router'
+import { useAuth } from '@/auth/AuthProvider'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -21,50 +21,46 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import { Button } from "@/components/ui/button";
+} from '@/components/ui/alert-dialog'
+import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { Input } from "@/components/ui/input";
-import DocumentsPanel from "@/documents/DocumentsPanel";
-import EmailSettingsPanel from "@/email/EmailSettingsPanel";
-import { cn } from "@/lib/utils";
-import {
-  useConversations,
-  useDeleteConversation,
-  useRenameConversation,
-} from "./api";
-import type { Conversation } from "./api";
+} from '@/components/ui/dropdown-menu'
+import { Input } from '@/components/ui/input'
+import DocumentsPanel from '@/documents/DocumentsPanel'
+import EmailSettingsPanel from '@/email/EmailSettingsPanel'
+import { cn } from '@/lib/utils'
+import { useConversations, useDeleteConversation, useRenameConversation } from './api'
+import type { Conversation } from './api'
 
 type Props = {
-  activeId?: string;
+  activeId?: string
   /** Called after the user picks a destination (closes the mobile drawer). */
-  onNavigate?(): void;
-};
+  onNavigate?(): void
+}
 
 /** Left-hand panel: new chat, the conversation list, and the account footer. */
 export default function ConversationSidebar({ activeId, onNavigate }: Props) {
-  const navigate = useNavigate();
-  const conversations = useConversations();
-  const deleteConversation = useDeleteConversation();
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [pendingDelete, setPendingDelete] = useState<Conversation | null>(null);
-  const [documentsOpen, setDocumentsOpen] = useState(false);
-  const [emailOpen, setEmailOpen] = useState(false);
+  const navigate = useNavigate()
+  const conversations = useConversations()
+  const deleteConversation = useDeleteConversation()
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [pendingDelete, setPendingDelete] = useState<Conversation | null>(null)
+  const [documentsOpen, setDocumentsOpen] = useState(false)
+  const [emailOpen, setEmailOpen] = useState(false)
 
   function confirmDelete() {
-    if (!pendingDelete) return;
-    const { id } = pendingDelete;
+    if (!pendingDelete) return
+    const { id } = pendingDelete
     deleteConversation.mutate(id, {
       onSuccess: () => {
-        if (id === activeId) void navigate("/", { replace: true });
+        if (id === activeId) void navigate('/', { replace: true })
       },
-    });
-    setPendingDelete(null);
+    })
+    setPendingDelete(null)
   }
 
   return (
@@ -82,11 +78,7 @@ export default function ConversationSidebar({ activeId, onNavigate }: Props) {
         </Link>
       </div>
       <div className="px-3 pb-2">
-        <Button
-          asChild
-          variant="outline"
-          className="w-full justify-start gap-2 bg-background"
-        >
+        <Button asChild variant="outline" className="w-full justify-start gap-2 bg-background">
           <Link to="/" onClick={onNavigate}>
             <SquarePen />
             New chat
@@ -94,34 +86,22 @@ export default function ConversationSidebar({ activeId, onNavigate }: Props) {
         </Button>
       </div>
 
-      <nav
-        aria-label="Conversations"
-        className="min-h-0 flex-1 overflow-y-auto px-2 pb-3"
-      >
+      <nav aria-label="Conversations" className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
         {conversations.isPending && <ListSkeleton />}
         {conversations.isError && (
-          <p className="px-3 py-2 text-sm text-muted-foreground">
-            Couldn't load conversations.
-          </p>
+          <p className="px-3 py-2 text-sm text-muted-foreground">Couldn't load conversations.</p>
         )}
         {conversations.data?.length === 0 && (
-          <p className="px-3 py-2 text-sm text-muted-foreground">
-            No conversations yet.
-          </p>
+          <p className="px-3 py-2 text-sm text-muted-foreground">No conversations yet.</p>
         )}
         {groupByRecency(conversations.data ?? []).map(({ label, items }) => (
           <section key={label} className="mt-3">
-            <h2 className="px-3 pb-1 text-xs font-medium text-muted-foreground">
-              {label}
-            </h2>
+            <h2 className="px-3 pb-1 text-xs font-medium text-muted-foreground">{label}</h2>
             <ul className="space-y-0.5">
               {items.map((c) => (
                 <li key={c.id}>
                   {editingId === c.id ? (
-                    <RenameField
-                      conversation={c}
-                      onDone={() => setEditingId(null)}
-                    />
+                    <RenameField conversation={c} onDone={() => setEditingId(null)} />
                   ) : (
                     <ConversationRow
                       conversation={c}
@@ -169,8 +149,7 @@ export default function ConversationSidebar({ activeId, onNavigate }: Props) {
           <AlertDialogHeader>
             <AlertDialogTitle>Delete conversation?</AlertDialogTitle>
             <AlertDialogDescription>
-              “{pendingDelete?.title}” and all of its messages will be
-              permanently deleted.
+              “{pendingDelete?.title}” and all of its messages will be permanently deleted.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -182,36 +161,29 @@ export default function ConversationSidebar({ activeId, onNavigate }: Props) {
         </AlertDialogContent>
       </AlertDialog>
     </div>
-  );
+  )
 }
 
 type RowProps = {
-  conversation: Conversation;
-  active: boolean;
-  onNavigate?(): void;
-  onRename(): void;
-  onDelete(): void;
-};
+  conversation: Conversation
+  active: boolean
+  onNavigate?(): void
+  onRename(): void
+  onDelete(): void
+}
 
-function ConversationRow({
-  conversation,
-  active,
-  onNavigate,
-  onRename,
-  onDelete,
-}: RowProps) {
+function ConversationRow({ conversation, active, onNavigate, onRename, onDelete }: RowProps) {
   return (
     <div
       className={cn(
-        "group relative flex items-center rounded-lg text-sm transition-colors hover:bg-sidebar-accent",
-        active &&
-          "bg-sidebar-accent font-medium text-sidebar-accent-foreground",
+        'group relative flex items-center rounded-lg text-sm transition-colors hover:bg-sidebar-accent',
+        active && 'bg-sidebar-accent font-medium text-sidebar-accent-foreground',
       )}
     >
       <Link
         to={`/c/${conversation.id}`}
         onClick={onNavigate}
-        aria-current={active ? "page" : undefined}
+        aria-current={active ? 'page' : undefined}
         title={conversation.title}
         className="min-w-0 flex-1 truncate rounded-lg py-2 pr-9 pl-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
       >
@@ -245,30 +217,23 @@ function ConversationRow({
         </DropdownMenuContent>
       </DropdownMenu>
     </div>
-  );
+  )
 }
 
 /** Inline title editor: Enter or blur saves, Escape cancels. */
-function RenameField({
-  conversation,
-  onDone,
-}: {
-  conversation: Conversation;
-  onDone(): void;
-}) {
-  const rename = useRenameConversation();
-  const [title, setTitle] = useState(conversation.title);
+function RenameField({ conversation, onDone }: { conversation: Conversation; onDone(): void }) {
+  const rename = useRenameConversation()
+  const [title, setTitle] = useState(conversation.title)
   // Set once the edit ends, so a blur that follows Enter/Escape is ignored.
-  const finished = useRef(false);
+  const finished = useRef(false)
 
   function save(e?: FormEvent) {
-    e?.preventDefault();
-    if (finished.current) return;
-    finished.current = true;
-    const next = title.trim();
-    if (next && next !== conversation.title)
-      rename.mutate({ id: conversation.id, title: next });
-    onDone();
+    e?.preventDefault()
+    if (finished.current) return
+    finished.current = true
+    const next = title.trim()
+    if (next && next !== conversation.title) rename.mutate({ id: conversation.id, title: next })
+    onDone()
   }
 
   return (
@@ -282,20 +247,20 @@ function RenameField({
         onFocus={(e) => e.target.select()}
         onBlur={() => save()}
         onKeyDown={(e) => {
-          if (e.key === "Escape") {
-            finished.current = true;
-            onDone();
+          if (e.key === 'Escape') {
+            finished.current = true
+            onDone()
           }
         }}
         className="h-9 bg-background"
       />
     </form>
-  );
+  )
 }
 
 function AccountFooter() {
-  const { user, logout } = useAuth();
-  const email = user?.email ?? "";
+  const { user, logout } = useAuth()
+  const email = user?.email ?? ''
 
   return (
     <div className="flex items-center gap-2.5 border-t px-3 py-3">
@@ -318,7 +283,7 @@ function AccountFooter() {
         <LogOut />
       </Button>
     </div>
-  );
+  )
 }
 
 function ListSkeleton() {
@@ -332,25 +297,23 @@ function ListSkeleton() {
         />
       ))}
     </div>
-  );
+  )
 }
 
 /** Bucket conversations (already newest-first) into Today / Previous 7 days / Older. */
-function groupByRecency(
-  items: Conversation[],
-): { label: string; items: Conversation[] }[] {
-  const startOfToday = new Date();
-  startOfToday.setHours(0, 0, 0, 0);
-  const weekAgo = startOfToday.getTime() - 7 * 24 * 60 * 60 * 1000;
+function groupByRecency(items: Conversation[]): { label: string; items: Conversation[] }[] {
+  const startOfToday = new Date()
+  startOfToday.setHours(0, 0, 0, 0)
+  const weekAgo = startOfToday.getTime() - 7 * 24 * 60 * 60 * 1000
   const groups = [
-    { label: "Today", items: [] as Conversation[] },
-    { label: "Previous 7 days", items: [] as Conversation[] },
-    { label: "Older", items: [] as Conversation[] },
-  ];
+    { label: 'Today', items: [] as Conversation[] },
+    { label: 'Previous 7 days', items: [] as Conversation[] },
+    { label: 'Older', items: [] as Conversation[] },
+  ]
   for (const c of items) {
-    const t = new Date(c.updated_at).getTime();
-    const index = t >= startOfToday.getTime() ? 0 : t >= weekAgo ? 1 : 2;
-    groups[index].items.push(c);
+    const t = new Date(c.updated_at).getTime()
+    const index = t >= startOfToday.getTime() ? 0 : t >= weekAgo ? 1 : 2
+    groups[index].items.push(c)
   }
-  return groups.filter((g) => g.items.length > 0);
+  return groups.filter((g) => g.items.length > 0)
 }
