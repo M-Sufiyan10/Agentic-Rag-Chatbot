@@ -4,6 +4,8 @@ import { AlertCircle, ArrowUp, RotateCcw } from 'lucide-react'
 import { ApiError } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
+import DraftCard from '@/email/DraftCard'
+import { useEmailDrafts } from '@/email/api'
 import { useMessages } from './api'
 import MessageBubble, { AssistantAvatar } from './MessageBubble'
 import Citations from './Citations'
@@ -22,6 +24,7 @@ type Props = {
 /** The transcript and composer for one conversation. */
 export default function ChatPane({ conversationId, initialMessage, onInitialMessageSent }: Props) {
   const messages = useMessages(conversationId)
+  const drafts = useEmailDrafts(conversationId).data ?? []
   const { streamingText, citations, tools, pendingMessage, status, error, send } =
     useChatStream(conversationId)
   const [lastSent, setLastSent] = useState<string | null>(null)
@@ -91,6 +94,13 @@ export default function ChatPane({ conversationId, initialMessage, onInitialMess
                     value={m.feedback ?? null}
                   />
                 ) : null}
+                {m.role === 'assistant' && m.id
+                  ? drafts
+                      .filter((d) => d.turn_id === m.id)
+                      .map((d) => (
+                        <DraftCard key={d.id} conversationId={conversationId} draft={d} />
+                      ))
+                  : null}
               </MessageBubble>
             ))}
             {showPending && <MessageBubble role="user" content={pendingMessage} />}

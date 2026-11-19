@@ -273,6 +273,37 @@ describe('ChatPane', () => {
     expect(screen.getAllByRole('button', { name: 'Bad response' })).toHaveLength(1)
   })
 
+  it('draft renders under its assistant message', async () => {
+    server.use(
+      http.get('*/api/conversations/c1/messages', () =>
+        HttpResponse.json([
+          { role: 'user', content: 'Email Bob', id: null, feedback: null },
+          { role: 'assistant', content: 'Drafted it.', id: 't1', feedback: null },
+        ]),
+      ),
+      http.get('*/api/conversations/c1/email-drafts', () =>
+        HttpResponse.json([
+          {
+            id: 'd1',
+            turn_id: 't1',
+            to_address: 'bob@example.com',
+            subject: 'Lunch',
+            body: 'Lunch tomorrow?',
+            reply_to_uid: null,
+            status: 'pending',
+            error: null,
+            created_at: '2026-11-19T10:00:00Z',
+            sent_at: null,
+          },
+        ]),
+      ),
+    )
+    renderPane()
+    expect(await screen.findByText('Draft email')).toBeVisible()
+    expect(screen.getByText('bob@example.com')).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Send' })).toBeVisible()
+  })
+
   it('shows no feedback buttons on the live streaming bubble', async () => {
     const gate = makeGate(1)
     server.use(

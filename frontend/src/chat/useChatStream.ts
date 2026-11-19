@@ -23,6 +23,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useCallback, useRef, useState } from 'react'
 import { apiFetch } from '@/api/client'
 import { parseSSE } from '@/api/sse'
+import { emailDraftsKey } from '@/email/api'
 import { conversationsKey, messagesKey } from './api'
 import type { Citation } from './api'
 
@@ -141,6 +142,7 @@ export function useChatStream(conversationId: string): ChatStream {
                 queryKey: messagesKey(conversationId),
               }),
               queryClient.invalidateQueries({ queryKey: conversationsKey }),
+              queryClient.invalidateQueries({ queryKey: emailDraftsKey(conversationId) }),
             ])
             setStreamingText('')
             setTools([])

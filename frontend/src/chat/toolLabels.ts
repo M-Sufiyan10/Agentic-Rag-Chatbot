@@ -18,6 +18,12 @@ export function toolLabel(name: string, status: 'running' | 'done'): string {
       return running ? 'Converting time zones…' : 'Converted time zones'
     case 'fetch':
       return running ? 'Reading the web page…' : 'Read the web page'
+    case 'list_emails':
+      return running ? 'Checking your inbox…' : 'Checked your inbox'
+    case 'read_email':
+      return running ? 'Reading an email…' : 'Read an email'
+    case 'draft_email':
+      return running ? 'Drafting an email…' : 'Drafted an email'
     default:
       return running ? `Calling ${name}…` : `Used ${name}`
   }
