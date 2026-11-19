@@ -250,3 +250,13 @@ a cloud deployment needs TLS or a private network (noted in README).
 
 Library choices for IMAP/SMTP and HTML-to-text; exact module layout; exact wording of tool
 descriptions and refusals; UI styling within the existing shadcn components; task breakdown.
+
+## 9. Plan rulings
+
+Refinements made while planning (full text in the plan header).
+
+- **P1.** No `email_draft` SSE event: drafts load from `GET /api/conversations/{cid}/email-drafts`, refetched when `done` arrives.
+- **P2.** Drafts store `reply_to_uid`, not a Message-ID; `send_email` sets `In-Reply-To`/`References` itself.
+- **P3.** Drafts from rolled-back turns are never listed or sent (only drafts of completed turns count).
+- **P4.** Draft status gains `sending` (`pending` to `sending` atomically, then `sent` or a final `failed`).
+- **P5.** `turn_id` and the connected address reach the tools and system prompt through `configurable`.

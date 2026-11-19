@@ -225,7 +225,63 @@ The config file is `backend/mcp_servers.json` (`MCP_CONFIG_PATH`, resolved relat
 | `MCP_UTILS_HOST`              | `127.0.0.1`        | `mcp-utils` bind address (the Docker image sets `0.0.0.0`) |
 | `MCP_UTILS_PORT`              | `8100`             | `mcp-utils` port                                           |
 
-A tool whose name matches a built-in tool or an already-loaded MCP tool is skipped with a warning; built-ins win. `GET /api/health` reports each server: `{"status": "ok", "mcp": {"utils": "ok", "fetch": "unavailable"}}`.
+A tool whose name matches a built-in tool or an already-loaded MCP tool is skipped with a warning; built-ins win. `GET /api/health` reports each server: `{"status": "ok", "mcp": {"utils": "ok", "fetch": "unavailable"}}`. It also has `"email": "off" | "ok" | "unavailable"`, the `mcp-email` check made once at startup (see [Email](#email)).
+
+## Email
+
+Each user can connect their own mailbox (IMAP/SMTP with an app password). The agent then has three tools: `list_emails` (recent inbox mail), `read_email` and `draft_email`. It can never send: a draft appears as a card under the chat, and the email goes out only when you click **Send** (or is dropped when you click **Cancel**). It is optional and off unless both `EMAIL_ENCRYPTION_KEY` and `MCP_EMAIL_TOKEN` are set in the backend's environment file (template: `.env.example`).
+
+Setup:
+
+```bash
+# 1. Generate an encryption key and set it as EMAIL_ENCRYPTION_KEY (see .env.example)
+cd backend
+uv run python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+# 2. Also set MCP_EMAIL_TOKEN=dev-email-token. That is the default docker-compose.yml
+#    gives the mcp-email service; the two values must match.
+# 3. Start the email MCP server (127.0.0.1:8101) and the GreenMail test mail server
+docker compose up -d greenmail mcp-email
+# 4. Create the email tables, then (re)start the backend
+uv run alembic upgrade head
+```
+
+Then click **Email** in the sidebar, pick a preset (Gmail, Outlook or Local test server), enter the address and an app password, and Save. Saving checks the IMAP and SMTP login and shows a readable error if it fails. The password is stored Fernet-encrypted, never returned by the API, and the model never sees it.
+
+| Variable                     | Default                     | Meaning                                                  |
+| ---------------------------- | --------------------------- | -------------------------------------------------------- |
+| `EMAIL_ENCRYPTION_KEY`       | unset                       | Fernet key for stored passwords; email is off without it |
+| `MCP_EMAIL_URL`              | `http://localhost:8101/mcp` | The `mcp-email` server                                   |
+| `MCP_EMAIL_TOKEN`            | unset                       | Bearer token; must match the `mcp-email` service         |
+| `EMAIL_TOOL_TIMEOUT_SECONDS` | `30`                        | Deadline for one email tool call                         |
+| `EMAIL_MAX_SENDS_PER_HOUR`   | `20`                        | Sends per user per hour                                  |
+
+Rules the system enforces:
+
+- **Listed senders only.** The agent can draft an email only to an address that has emailed the mailbox before. The check runs when the draft is made and again when it is sent, inside `mcp-email`, so it holds even if the backend is bypassed.
+- **Send-click approval.** Drafts are stored in Postgres and sent through `POST /api/email/drafts/{id}/send`. A double click or two concurrent requests send exactly one email. A draft has one recipient; there is no CC/BCC and no attachments.
+- **Read-only inbox.** Only INBOX is read, and reading never marks mail as read.
+- **Untrusted text.** Email text is marked as untrusted data for the model.
+
+Try it with GreenMail, a local mail server. The Local preset uses host `greenmail`, IMAP 3143, SMTP 3025, security none; `mcp-email` accepts that only because compose sets `EMAIL_ALLOW_INSECURE_HOSTS=true` for it. Connect `me@example.com` with the Local preset (GreenMail creates the account on first login, so any password works), then seed a message:
+
+```bash
+python3 - <<'PY'
+import smtplib
+from email.message import EmailMessage
+
+m = EmailMessage()
+m["From"], m["To"], m["Subject"] = "sara@example.com", "me@example.com", "Invoice 42"
+m.set_content("Hi, when can you pay invoice 42?")
+with smtplib.SMTP("127.0.0.1", 3025) as s:
+    s.send_message(m)
+PY
+```
+
+Now ask "summarize my unread emails", "what did Sara ask?" and "reply to Sara that I'll pay on Friday", then click Send on the draft card. A request to email someone who never wrote to you is refused.
+
+**Privacy note.** Email text that the tools return is stored in the chat history and in Langfuse (if you run it), like any other tool output. Deleting a conversation removes it from the history; disconnecting the mailbox does not. Only the password gets special protection: it is added below the traced tool boundary, so it appears in no log or trace.
+
+**Cloud note.** Credentials travel between the backend and `mcp-email` over plain HTTP, which is fine on localhost or the Docker network. A cloud deployment needs TLS or a private network between them, and a real `MCP_EMAIL_TOKEN`. Never set `EMAIL_ALLOW_INSECURE_HOSTS` outside local development. See [learning note 7](docs/learning/07-email-mcp.md) and [`mcp-email/README.md`](mcp-email/README.md).
 
 ## Observability
 
