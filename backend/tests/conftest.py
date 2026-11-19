@@ -80,6 +80,9 @@ def test_settings(tmp_path: Path) -> Settings:
         # A developer's .env may enable tracing; tests must never reach Langfuse.
         langfuse_public_key=None,
         langfuse_secret_key=None,
+        # Likewise for email: a developer's settings file must not enable it in tests.
+        email_encryption_key=None,
+        mcp_email_token=None,
     )
 
 

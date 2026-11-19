@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 
+from cryptography.fernet import Fernet
 from ddgs.engines import ENGINES
 from pydantic import SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -62,6 +63,36 @@ class Settings(BaseSettings):
     langfuse_secret_key: SecretStr | None = None
     langfuse_base_url: str = "http://localhost:3100"
     langfuse_timeout_seconds: float = 5
+    # Optional email: on only when both the encryption key (for stored mailbox passwords)
+    # and the email MCP server's bearer token are set.
+    email_encryption_key: SecretStr | None = None
+    mcp_email_url: str = "http://localhost:8101/mcp"
+    mcp_email_token: SecretStr | None = None
+    email_tool_timeout_seconds: float = 30
+    email_max_sends_per_hour: int = 20
+
+    @field_validator("email_encryption_key")
+    @classmethod
+    def _email_key_is_fernet(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is not None and value.get_secret_value():
+            try:
+                Fernet(value.get_secret_value().encode())
+            except ValueError as exc:
+                raise ValueError(
+                    "EMAIL_ENCRYPTION_KEY is not a valid Fernet key; generate one with "
+                    "python -c 'from cryptography.fernet import Fernet; "
+                    "print(Fernet.generate_key().decode())'"
+                ) from exc
+        return value
+
+    @property
+    def email_enabled(self) -> bool:
+        return bool(
+            self.email_encryption_key
+            and self.email_encryption_key.get_secret_value()
+            and self.mcp_email_token
+            and self.mcp_email_token.get_secret_value()
+        )
 
     @model_validator(mode="after")
     def _default_embedding_prefixes(self) -> "Settings":
