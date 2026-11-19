@@ -215,6 +215,7 @@ async def stream_agent_events(
     user_id: str,
     documents: dict[str, Any] | None = None,
     tracing: Tracing | None = None,
+    email: dict[str, Any] | None = None,
 ) -> AsyncGenerator[ServerSentEvent]:
     """Run the agent on ``user_text`` in thread ``thread_id`` and yield SSE events.
 
@@ -237,13 +238,21 @@ async def stream_agent_events(
     failure, one ``error`` event (``{"message": ...}``) instead of ``done``.
     See the module docstring for the exact mapping and the rollback rules.
     """
-    configurable: dict[str, Any] = {"thread_id": thread_id, "user_id": user_id}
+    human_message = HumanMessage(user_text, id=str(uuid4()))
+    # ``turn_id`` (the user message's id) lets tools such as ``draft_email`` tie their
+    # output to this turn; ``email`` is the connected mailbox's overview, if any.
+    configurable: dict[str, Any] = {
+        "thread_id": thread_id,
+        "user_id": user_id,
+        "turn_id": str(human_message.id),
+    }
     if documents is not None:
         configurable["documents"] = documents
+    if email is not None:
+        configurable["email"] = email
     config: RunnableConfig = {"configurable": configurable}
     reply_parts: list[str] = []
     citations: list[dict[str, Any]] = []
-    human_message = HumanMessage(user_text, id=str(uuid4()))
     if tracing is not None:
         config["callbacks"] = tracing.callbacks(trace_id_for_turn(str(human_message.id)))
         config["metadata"] = {

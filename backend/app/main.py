@@ -29,12 +29,23 @@ from app.documents.embeddings import build_embeddings
 from app.documents.ingestion import fail_interrupted_documents
 from app.documents.router import router as documents_router
 from app.documents.storage import LocalFileStorage
+from app.email.agent_tools import make_email_tools
 from app.email.client import EmailServerClient
 from app.email.router import router as email_router
 from app.feedback.router import router as feedback_router
 from app.observability import Tracing, build_tracing
 
 logger = logging.getLogger(__name__)
+
+
+def email_tools_for(app: FastAPI) -> list[BaseTool]:
+    """The agent's email tools, or ``[]`` when email is off (``app.state.email_client`` is None)."""
+    client: EmailServerClient | None = app.state.email_client
+    if client is None:
+        return []
+    return make_email_tools(
+        sessionmaker=app.state.sessionmaker, client=client, settings=app.state.settings
+    )
 
 
 def create_app(
@@ -61,6 +72,7 @@ def create_app(
         builtins = build_tools(
             settings, sessionmaker=app.state.sessionmaker, embeddings=app.state.embeddings
         )
+        builtins += email_tools_for(app)
         mcp_tools, app.state.mcp_servers = await load_mcp_tools(
             load_mcp_config(Path(settings.mcp_config_path)),
             reserved_names={t.name for t in builtins},

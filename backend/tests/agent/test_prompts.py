@@ -67,3 +67,17 @@ def test_base_system_prompt_states_todays_date() -> None:
     assert prompt.startswith(SYSTEM_PROMPT + "\n\n")
     assert "Today is Thursday, 12 November 2026 (UTC)." in prompt
     assert "never say that something before today hasn't happened" in prompt
+
+
+def test_email_note_empty_without_email() -> None:
+    from app.agent.prompts import email_note
+
+    assert email_note(None) == ""
+
+
+def test_email_note_names_address_and_click_rule() -> None:
+    from app.agent.prompts import email_note
+
+    note = email_note({"address": "me@example.com"})
+    assert "me@example.com" in note
+    assert "Send" in note

@@ -375,3 +375,23 @@ async def test_events_unchanged_with_tracing() -> None:
 
     assert [n for n, _ in traced] == [n for n, _ in plain]
     assert traced == plain
+
+
+async def test_turn_id_in_configurable() -> None:
+    from langchain_core.runnables import RunnableConfig
+    from langchain_core.tools import tool
+
+    @tool
+    def turn(config: RunnableConfig) -> str:
+        """Echo the turn id."""
+        return str(config["configurable"]["turn_id"])
+
+    model = ScriptedChatModel(replies=[tool_call_reply("turn", {}, "c1"), AIMessage("ok")])
+    graph = build_graph(model, InMemorySaver(), tools=[turn])
+
+    events = await _collect(graph, "hi")
+
+    (tool_end,) = [d for n, d in events if n == "tool_end"]
+    state = await graph.aget_state({"configurable": {"thread_id": "thread-1"}})
+    human = next(m for m in state.values["messages"] if isinstance(m, HumanMessage))
+    assert tool_end["output"] == human.id

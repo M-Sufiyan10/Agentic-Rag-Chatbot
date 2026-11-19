@@ -71,7 +71,12 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode
 
 from app.agent.prefetch import Prefetcher
-from app.agent.prompts import FINAL_ROUND_INSTRUCTION, base_system_prompt, documents_note
+from app.agent.prompts import (
+    FINAL_ROUND_INSTRUCTION,
+    base_system_prompt,
+    documents_note,
+    email_note,
+)
 
 
 def _tool_rounds_this_turn(messages: Sequence[BaseMessage]) -> int:
@@ -135,6 +140,9 @@ def build_graph(
         note = documents_note((config.get("configurable") or {}).get("documents"))
         if note:
             system += "\n\n" + note
+        mailbox_note = email_note((config.get("configurable") or {}).get("email"))
+        if mailbox_note:
+            system += "\n\n" + mailbox_note
         prompt: list[BaseMessage] = [SystemMessage(system), *history]
         if tools and _tool_rounds_this_turn(state["messages"]) >= max_tool_rounds:
             response = await model.ainvoke([*prompt, SystemMessage(FINAL_ROUND_INSTRUCTION)])

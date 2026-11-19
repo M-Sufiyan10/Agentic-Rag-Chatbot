@@ -25,6 +25,7 @@ from app.conversations.models import Conversation
 from app.conversations.service import get_owned_conversation
 from app.db import get_session
 from app.documents.retrieval import document_overview
+from app.email.service import get_account
 from app.feedback.models import MessageFeedback
 from app.observability import Tracing
 
@@ -52,6 +53,7 @@ async def stream_and_release(
     user_id: str,
     documents: dict[str, Any] | None = None,
     tracing: Tracing | None = None,
+    email: dict[str, Any] | None = None,
 ) -> AsyncIterator[ServerSentEvent]:
     """Stream the agent's events, then release ``conversation_id``.
 
@@ -65,7 +67,13 @@ async def stream_and_release(
     try:
         async with aclosing(
             stream_agent_events(
-                graph, str(conversation_id), text, user_id, documents, tracing=tracing
+                graph,
+                str(conversation_id),
+                text,
+                user_id,
+                documents,
+                tracing=tracing,
+                email=email,
             )
         ) as events:
             async for event in events:
@@ -92,6 +100,11 @@ async def send_message(
     conversation = await get_owned_conversation(session, user.id, conversation_id)
     # The authenticated user's own documents, for the agent's per-turn note.
     overview = await document_overview(session, user_id=user.id, limit=PROMPT_DOCUMENT_LIMIT)
+    email: dict[str, Any] | None = None
+    if request.app.state.email_client is not None:
+        account = await get_account(session, user.id)
+        if account is not None:
+            email = {"address": account.address}
     # No ``await`` between this check and the ``add`` below, so two requests
     # on the event loop cannot both pass the check.
     if conversation_id in in_progress_conversations:
@@ -115,6 +128,7 @@ async def send_message(
             str(user.id),
             dataclasses.asdict(overview),
             tracing=request.app.state.tracing,
+            email=email,
         ),
         background=release,
     )
